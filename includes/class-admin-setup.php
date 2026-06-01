@@ -7,25 +7,25 @@
  * existing address) without any terminal, SDK, or CLI work.
  *
  * Integration:
- *   1. Drop this file into agentpay/includes/.
- *   2. In agentpay/agentpay.php (or wherever AGENTPAY classes are loaded), add:
- *        require_once AGENTPAY_PATH . 'includes/class-admin-setup.php';
- *        new \AgentPay\AdminSetup();
+ *   1. Drop this file into clearwallet/includes/.
+ *   2. In clearwallet/clearwallet.php (or wherever CLEARWALLET classes are loaded), add:
+ *        require_once CLEARWALLET_PATH . 'includes/class-admin-setup.php';
+ *        new \ClearWallet\AdminSetup();
  *   3. In your existing class-admin.php, replace the body of render_setup_tab()
  *      with a single call: AdminSetup::render_setup_tab();
  *
  * Stored options:
- *   agentpay_cdp_api_key_id      Plaintext (UUID, not a secret).
- *   agentpay_cdp_api_key_secret  Encrypted via wp_salt-derived key.
- *   agentpay_cdp_wallet_secret   Encrypted, same scheme.
- *   agentpay_receiving_address   Plaintext (0x... address — public info).
- *   agentpay_wallet_created_at   Unix timestamp.
+ *   clearwallet_cdp_api_key_id      Plaintext (UUID, not a secret).
+ *   clearwallet_cdp_api_key_secret  Encrypted via wp_salt-derived key.
+ *   clearwallet_cdp_wallet_secret   Encrypted, same scheme.
+ *   clearwallet_receiving_address   Plaintext (0x... address — public info).
+ *   clearwallet_wallet_created_at   Unix timestamp.
  *
- * @package AgentPay
+ * @package ClearWallet
  * @since   1.1.0
  */
 
-namespace AgentPay;
+namespace ClearWallet;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -33,17 +33,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class AdminSetup {
 
-	const NONCE_ACTION   = 'agentpay_setup';
+	const NONCE_ACTION   = 'clearwallet_setup';
 	const CAPABILITY     = 'manage_options';
 	const PORTAL_URL     = 'https://portal.cdp.coinbase.com/';
 	const HELP_API_KEY   = 'https://portal.cdp.coinbase.com/access/api';
 	const HELP_WALLET    = 'https://portal.cdp.coinbase.com/access/api/wallet-secret';
 
 	public function __construct() {
-		add_action( 'wp_ajax_agentpay_test_connection', array( $this, 'ajax_test_connection' ) );
-		add_action( 'wp_ajax_agentpay_create_wallet',   array( $this, 'ajax_create_wallet' ) );
-		add_action( 'wp_ajax_agentpay_use_existing',    array( $this, 'ajax_use_existing' ) );
-		add_action( 'wp_ajax_agentpay_disconnect',      array( $this, 'ajax_disconnect' ) );
+		add_action( 'wp_ajax_clearwallet_test_connection', array( $this, 'ajax_test_connection' ) );
+		add_action( 'wp_ajax_clearwallet_create_wallet',   array( $this, 'ajax_create_wallet' ) );
+		add_action( 'wp_ajax_clearwallet_use_existing',    array( $this, 'ajax_use_existing' ) );
+		add_action( 'wp_ajax_clearwallet_disconnect',      array( $this, 'ajax_disconnect' ) );
 		add_action( 'admin_enqueue_scripts',            array( $this, 'enqueue_assets' ) );
 	}
 
@@ -52,8 +52,8 @@ class AdminSetup {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	public static function render_setup_tab() {
-		$address = get_option( 'agentpay_receiving_address', '' );
-		echo '<div class="agentpay-setup">';
+		$address = get_option( 'clearwallet_receiving_address', '' );
+		echo '<div class="clearwallet-setup">';
 		if ( $address ) {
 			self::render_configured_state( $address );
 		} else {
@@ -64,12 +64,14 @@ class AdminSetup {
 	}
 
 	private static function render_empty_state() {
-		$mode = isset( $_GET['agentpay_mode'] ) && 'existing' === $_GET['agentpay_mode'] ? 'existing' : 'create';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- UI-only mode toggle, no state change
+		$mode_raw = isset( $_GET['clearwallet_mode'] ) ? sanitize_key( wp_unslash( $_GET['clearwallet_mode'] ) ) : '';
+		$mode     = ( 'existing' === $mode_raw ) ? 'existing' : 'create';
 		?>
 		<header class="ap-setup-header">
 			<h2><?php esc_html_e( 'Connect your Coinbase wallet', 'agentpay-by-cleardesk-seo' ); ?></h2>
 			<p class="ap-setup-lede">
-				<?php esc_html_e( 'AgentPay needs a wallet to receive payments from AI agents and to issue refunds when pages break. We\'ll create one for you in your own Coinbase Developer account — you keep custody, we just point the plugin at it.', 'agentpay-by-cleardesk-seo' ); ?>
+				<?php esc_html_e( 'ClearWallet needs a wallet to receive payments from AI agents and to issue refunds when pages break. We\'ll create one for you in your own Coinbase Developer account — you keep custody, we just point the plugin at it.', 'agentpay-by-cleardesk-seo' ); ?>
 			</p>
 
 			<nav class="ap-setup-tabs">
@@ -95,11 +97,16 @@ class AdminSetup {
 	private static function render_create_form() {
 		?>
 		<form class="ap-setup-form" id="ap-create-form">
-			<?php wp_nonce_field( self::NONCE_ACTION, 'agentpay_nonce' ); ?>
+			<?php wp_nonce_field( self::NONCE_ACTION, 'clearwallet_nonce' ); ?>
 
 			<p class="ap-setup-section-lede">
 				<?php esc_html_e( 'Paste the three values from your Coinbase Developer Portal. We\'ll provision a fresh wallet on Base in your project.', 'agentpay-by-cleardesk-seo' ); ?>
 			</p>
+
+			<div style="background:#e0f2fe;border-left:4px solid #0284c7;padding:12px 14px;margin:0 0 16px 0;border-radius:0 4px 4px 0;">
+				<strong style="display:block;margin-bottom:4px;"><?php esc_html_e( 'About the API Key signature algorithm', 'agentpay-by-cleardesk-seo' ); ?></strong>
+				<?php esc_html_e( 'When creating your CDP API Key, Coinbase\'s default is Ed25519 — this works fine on WordPress (uses PHP\'s built-in sodium extension). If your host has sodium disabled and you see a "sodium required" error after pasting, recreate the key in CDP with Signature algorithm set to ECDSA (under Advanced Settings). The plugin auto-detects which algorithm you used; you don\'t need to tell it.', 'agentpay-by-cleardesk-seo' ); ?>
+			</div>
 
 			<div class="ap-field">
 				<label for="ap-api-key-id">
@@ -165,7 +172,7 @@ class AdminSetup {
 	private static function render_existing_form() {
 		?>
 		<form class="ap-setup-form" id="ap-existing-form">
-			<?php wp_nonce_field( self::NONCE_ACTION, 'agentpay_nonce' ); ?>
+			<?php wp_nonce_field( self::NONCE_ACTION, 'clearwallet_nonce' ); ?>
 
 			<p class="ap-setup-section-lede">
 				<?php esc_html_e( 'Already have a CDP wallet on Base? Paste the address along with your API credentials. We\'ll verify the address belongs to your project and attach the plugin to it.', 'agentpay-by-cleardesk-seo' ); ?>
@@ -227,13 +234,13 @@ class AdminSetup {
 
 	private static function render_configured_state( $address ) {
 		$short      = substr( $address, 0, 6 ) . '…' . substr( $address, -4 );
-		$created_at = (int) get_option( 'agentpay_wallet_created_at', 0 );
+		$created_at = (int) get_option( 'clearwallet_wallet_created_at', 0 );
 		$basescan   = 'https://basescan.org/address/' . $address;
 		?>
 		<header class="ap-setup-header">
 			<h2><?php esc_html_e( 'Your wallet is ready', 'agentpay-by-cleardesk-seo' ); ?></h2>
 			<p class="ap-setup-lede">
-				<?php esc_html_e( 'AgentPay is connected to a wallet in your Coinbase Developer account. This is where AI agents pay you, where refunds originate, and where the 1% fee sweep runs from.', 'agentpay-by-cleardesk-seo' ); ?>
+				<?php esc_html_e( 'ClearWallet is connected to a wallet in your Coinbase Developer account. This is where AI agents pay you, where refunds originate, and where the 1% fee sweep runs from.', 'agentpay-by-cleardesk-seo' ); ?>
 			</p>
 		</header>
 
@@ -271,7 +278,7 @@ class AdminSetup {
 		</div>
 
 		<div class="ap-actions">
-			<a href="<?php echo esc_url( admin_url( 'tools.php?page=agentpay&tab=configuration' ) ); ?>"
+			<a href="<?php echo esc_url( admin_url( 'tools.php?page=clearwallet&tab=configuration' ) ); ?>"
 			   class="button button-primary button-large">
 				<?php esc_html_e( 'Next: set your prices', 'agentpay-by-cleardesk-seo' ); ?> →
 			</a>
@@ -310,14 +317,15 @@ class AdminSetup {
 				<ol>
 					<li><?php
 						printf(
+							/* translators: %s: Coinbase Developer Portal URL */
 							wp_kses_post( __( 'Sign in to the <a href="%s" target="_blank" rel="noopener">Coinbase Developer Portal</a>.', 'agentpay-by-cleardesk-seo' ) ),
 							esc_url( self::PORTAL_URL )
 						);
 					?></li>
 					<li><?php esc_html_e( 'Select your project (create one if you don\'t have any).', 'agentpay-by-cleardesk-seo' ); ?></li>
-					<li><?php esc_html_e( 'In the left sidebar, click Access → API Keys.', 'agentpay-by-cleardesk-seo' ); ?></li>
-					<li><?php esc_html_e( 'Click "Create API Key", give it a name like "AgentPay", and enable the Wallet scope.', 'agentpay-by-cleardesk-seo' ); ?></li>
-					<li><?php esc_html_e( 'Copy the API Key ID (a UUID) and download the full key. The Secret is the PEM block inside the downloaded file — paste the entire block including BEGIN/END lines.', 'agentpay-by-cleardesk-seo' ); ?></li>
+					<li><?php esc_html_e( 'In the left sidebar, click API Keys → Secret API Keys.', 'agentpay-by-cleardesk-seo' ); ?></li>
+					<li><?php esc_html_e( 'Click "Create API Key" and give it a name like "ClearWallet". Either signature algorithm (Ed25519, the default, or ECDSA under Advanced Settings) is fine — the plugin supports both.', 'agentpay-by-cleardesk-seo' ); ?></li>
+					<li><?php esc_html_e( 'Click "Create & Download". Copy the API Key ID (the "name" field, looks like organizations/.../apiKeys/...) and the API Key Secret (the "privateKey" field — either a base64 string for Ed25519 or a PEM block for ECDSA). Paste both into the form.', 'agentpay-by-cleardesk-seo' ); ?></li>
 				</ol>
 				<p class="ap-modal-foot-note">
 					<?php esc_html_e( 'The API Key ID is safe to share. The API Key Secret is sensitive — store it like a password.', 'agentpay-by-cleardesk-seo' ); ?>
@@ -332,7 +340,12 @@ class AdminSetup {
 				<button class="ap-modal-close" aria-label="Close">×</button>
 			</div>
 			<div class="ap-modal-body">
-				<p><?php esc_html_e( 'The API Key Secret comes in the JSON or PEM file you downloaded when you created the API Key. Open it and copy the value labeled "privateKey" — including the BEGIN EC PRIVATE KEY and END EC PRIVATE KEY lines.', 'agentpay-by-cleardesk-seo' ); ?></p>
+				<p><?php esc_html_e( 'The API Key Secret is the privateKey field inside the JSON file Coinbase gave you when you created the API Key. The format depends on which signature algorithm you chose — both are supported:', 'agentpay-by-cleardesk-seo' ); ?></p>
+				<ul>
+					<li><strong>Ed25519</strong> (CDP default): <?php esc_html_e( 'A short base64 string with no BEGIN/END markers. Paste it directly.', 'agentpay-by-cleardesk-seo' ); ?></li>
+					<li><strong>ECDSA / ES256</strong>: <?php esc_html_e( 'A multi-line PEM block starting with -----BEGIN-----. Paste it including the BEGIN and END lines.', 'agentpay-by-cleardesk-seo' ); ?></li>
+				</ul>
+				<p><?php esc_html_e( 'The plugin auto-detects which type you pasted. If you see a "sodium extension required" error, your PHP host has sodium disabled — recreate the API Key in CDP with the signature algorithm set to ECDSA (under Advanced Settings) and use that instead.', 'agentpay-by-cleardesk-seo' ); ?></p>
 				<p><?php esc_html_e( 'If you didn\'t save the file when you created the key, you\'ll need to generate a new API Key in the Portal. The old one stops working as soon as you generate the replacement.', 'agentpay-by-cleardesk-seo' ); ?></p>
 			</div>
 		</div>
@@ -356,7 +369,7 @@ class AdminSetup {
 
 				<ul class="ap-loud-checklist">
 					<li><span class="dashicons dashicons-yes"></span><?php esc_html_e( 'A password manager open and ready to save the value', 'agentpay-by-cleardesk-seo' ); ?></li>
-					<li><span class="dashicons dashicons-yes"></span><?php esc_html_e( 'This AgentPay setup tab open in another window, ready to paste', 'agentpay-by-cleardesk-seo' ); ?></li>
+					<li><span class="dashicons dashicons-yes"></span><?php esc_html_e( 'This ClearWallet setup tab open in another window, ready to paste', 'agentpay-by-cleardesk-seo' ); ?></li>
 					<li><span class="dashicons dashicons-yes"></span><?php esc_html_e( 'A backup location in case the password manager fails', 'agentpay-by-cleardesk-seo' ); ?></li>
 				</ul>
 
@@ -406,7 +419,7 @@ class AdminSetup {
 		$creds = $this->extract_creds( true );
 
 		$client = new CdpClient( $creds['api_key_id'], $creds['api_key_secret'], $creds['wallet_secret'] );
-		$result = $client->create_evm_account( 'agentpay-' . wp_generate_password( 6, false ) );
+		$result = $client->create_evm_account( 'clearwallet-' . wp_generate_password( 6, false ) );
 
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( array( 'message' => $result->get_error_message() ), 400 );
@@ -424,6 +437,7 @@ class AdminSetup {
 	public function ajax_use_existing() {
 		$this->check_ajax();
 		$creds   = $this->extract_creds( true );
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via $this->check_ajax()
 		$address = isset( $_POST['address'] ) ? sanitize_text_field( wp_unslash( $_POST['address'] ) ) : '';
 
 		$client = new CdpClient( $creds['api_key_id'], $creds['api_key_secret'], $creds['wallet_secret'] );
@@ -444,11 +458,11 @@ class AdminSetup {
 
 	public function ajax_disconnect() {
 		$this->check_ajax();
-		delete_option( 'agentpay_cdp_api_key_id' );
-		delete_option( 'agentpay_cdp_api_key_secret' );
-		delete_option( 'agentpay_cdp_wallet_secret' );
-		delete_option( 'agentpay_receiving_address' );
-		delete_option( 'agentpay_wallet_created_at' );
+		delete_option( 'clearwallet_cdp_api_key_id' );
+		delete_option( 'clearwallet_cdp_api_key_secret' );
+		delete_option( 'clearwallet_cdp_wallet_secret' );
+		delete_option( 'clearwallet_receiving_address' );
+		delete_option( 'clearwallet_wallet_created_at' );
 		wp_send_json_success( array( 'reload' => true ) );
 	}
 
@@ -464,12 +478,24 @@ class AdminSetup {
 	}
 
 	private function extract_creds( $require_wallet_secret ) {
+		// All three $_POST reads in this method are reached only through AJAX
+		// handlers that have already called $this->check_ajax(), which performs
+		// check_ajax_referer() + current_user_can(). PluginCheck can't follow the
+		// call graph, so nonce-verification warnings are suppressed inline.
+		// api_key_secret is sanitized via self::sanitize_pem() which preserves
+		// the PEM line breaks that sanitize_text_field() would corrupt.
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via $this->check_ajax()
 		$id     = isset( $_POST['api_key_id'] )     ? sanitize_text_field( wp_unslash( $_POST['api_key_id'] ) ) : '';
-		$secret = isset( $_POST['api_key_secret'] ) ? wp_unslash( $_POST['api_key_secret'] )                    : '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via $this->check_ajax(); sanitized via self::sanitize_pem()
+		$secret = isset( $_POST['api_key_secret'] ) ? self::sanitize_pem( wp_unslash( $_POST['api_key_secret'] ) ) : '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via $this->check_ajax()
 		$wallet = isset( $_POST['wallet_secret'] )  ? sanitize_text_field( wp_unslash( $_POST['wallet_secret'] ) ) : '';
 
 		if ( empty( $id ) || empty( $secret ) ) {
 			wp_send_json_error( array( 'message' => __( 'API Key ID and Secret are both required.', 'agentpay-by-cleardesk-seo' ) ), 400 );
+		}
+		if ( ! self::is_valid_pem( $secret ) ) {
+			wp_send_json_error( array( 'message' => __( 'API Key Secret must be a PEM-formatted EC private key.', 'agentpay-by-cleardesk-seo' ) ), 400 );
 		}
 		if ( $require_wallet_secret && empty( $wallet ) ) {
 			wp_send_json_error( array( 'message' => __( 'Wallet Secret is required for wallet operations.', 'agentpay-by-cleardesk-seo' ) ), 400 );
@@ -482,14 +508,44 @@ class AdminSetup {
 		);
 	}
 
-	private function save_credentials( $creds, $address ) {
-		update_option( 'agentpay_cdp_api_key_id', $creds['api_key_id'], false );
-		update_option( 'agentpay_cdp_api_key_secret', self::encrypt( $creds['api_key_secret'] ), false );
-		if ( ! empty( $creds['wallet_secret'] ) ) {
-			update_option( 'agentpay_cdp_wallet_secret', self::encrypt( $creds['wallet_secret'] ), false );
+	/**
+	 * PEM-aware sanitizer. Strips null bytes and non-printable control
+	 * characters while preserving the LF newlines and base64 chars that
+	 * PEM structure requires. Normalizes CRLF to LF and caps total length.
+	 *
+	 * @param mixed $value Raw input from $_POST (already wp_unslash'd).
+	 * @return string Sanitized PEM-like string.
+	 */
+	private static function sanitize_pem( $value ) {
+		if ( ! is_string( $value ) ) { return ''; }
+		$value = str_replace( "\0", '', $value );           // null bytes
+		$value = str_replace( "\r\n", "\n", $value );       // normalize line endings
+		$value = preg_replace( '/[^\x09\x0A\x20-\x7E]/', '', $value ); // tab/LF/printable ASCII only
+		if ( strlen( $value ) > 8192 ) {
+			$value = substr( $value, 0, 8192 );
 		}
-		update_option( 'agentpay_receiving_address', $address, true );
-		update_option( 'agentpay_wallet_created_at', time(), false );
+		return trim( $value );
+	}
+
+	/**
+	 * Structural validation: a usable PEM has matching BEGIN/END markers.
+	 * Does not cryptographically validate the key — that happens when CDP
+	 * client uses it. Just rejects obvious garbage.
+	 */
+	private static function is_valid_pem( $value ) {
+		return is_string( $value )
+			&& strpos( $value, '-----BEGIN' ) !== false
+			&& strpos( $value, '-----END' )   !== false;
+	}
+
+	private function save_credentials( $creds, $address ) {
+		update_option( 'clearwallet_cdp_api_key_id', $creds['api_key_id'], false );
+		update_option( 'clearwallet_cdp_api_key_secret', self::encrypt( $creds['api_key_secret'] ), false );
+		if ( ! empty( $creds['wallet_secret'] ) ) {
+			update_option( 'clearwallet_cdp_wallet_secret', self::encrypt( $creds['wallet_secret'] ), false );
+		}
+		update_option( 'clearwallet_receiving_address', $address, true );
+		update_option( 'clearwallet_wallet_created_at', time(), false );
 	}
 
 	/**
@@ -501,7 +557,7 @@ class AdminSetup {
 		if ( ! function_exists( 'openssl_encrypt' ) ) {
 			return $plaintext;
 		}
-		$key = hash( 'sha256', wp_salt( 'auth' ) . 'agentpay-cdp', true );
+		$key = hash( 'sha256', wp_salt( 'auth' ) . 'clearwallet-cdp', true );
 		$iv  = random_bytes( 16 );
 		$ct  = openssl_encrypt( $plaintext, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv );
 		return 'v1:' . base64_encode( $iv . $ct );
@@ -515,7 +571,7 @@ class AdminSetup {
 		if ( false === $blob || strlen( $blob ) < 17 ) {
 			return '';
 		}
-		$key = hash( 'sha256', wp_salt( 'auth' ) . 'agentpay-cdp', true );
+		$key = hash( 'sha256', wp_salt( 'auth' ) . 'clearwallet-cdp', true );
 		$iv  = substr( $blob, 0, 16 );
 		$ct  = substr( $blob, 16 );
 		$pt  = openssl_decrypt( $ct, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv );
@@ -525,9 +581,9 @@ class AdminSetup {
 	private static function tab_url( $mode ) {
 		return add_query_arg(
 			array(
-				'page'          => 'agentpay',
+				'page'          => 'clearwallet',
 				'tab'           => 'setup',
-				'agentpay_mode' => $mode,
+				'clearwallet_mode' => $mode,
 			),
 			admin_url( 'tools.php' )
 		);
@@ -538,7 +594,10 @@ class AdminSetup {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	public function enqueue_assets( $hook ) {
-		if ( false === strpos( (string) $hook, 'agentpay-by-cleardesk-seo' ) ) {
+		// $hook is WP-generated from the admin slug — for our Tools submenu
+		// registered with slug 'clearwallet', this is 'tools_page_clearwallet'.
+		// The strpos guard prevents enqueueing on other admin pages.
+		if ( false === strpos( (string) $hook, 'clearwallet' ) ) {
 			return;
 		}
 
@@ -546,25 +605,25 @@ class AdminSetup {
 		// Loading them as real files (instead of inline heredocs) satisfies
 		// WP.org plugin-check, keeps them browser-cacheable, and lets editors
 		// like VS Code give us syntax highlighting.
-		$base_url = defined( 'AGENTPAY_URL' ) ? AGENTPAY_URL : plugin_dir_url( __FILE__ ) . '../';
-		$version  = defined( 'AGENTPAY_VERSION' ) ? AGENTPAY_VERSION : '1.0.0';
+		$base_url = defined( 'CLEARWALLET_URL' ) ? CLEARWALLET_URL : plugin_dir_url( __FILE__ ) . '../';
+		$version  = defined( 'CLEARWALLET_VERSION' ) ? CLEARWALLET_VERSION : '1.0.0';
 
 		wp_enqueue_style(
-			'agentpay-admin-setup',
+			'clearwallet-admin-setup',
 			$base_url . 'admin/css/admin-setup.css',
 			array(),
 			$version
 		);
 
 		wp_enqueue_script(
-			'agentpay-admin-setup',
+			'clearwallet-admin-setup',
 			$base_url . 'admin/js/admin-setup.js',
 			array( 'jquery' ),
 			$version,
 			true
 		);
 
-		wp_localize_script( 'agentpay-admin-setup', 'AgentPaySetup', array(
+		wp_localize_script( 'clearwallet-admin-setup', 'ClearWalletSetup', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 			'nonce'   => wp_create_nonce( self::NONCE_ACTION ),
 			'strings' => array(
@@ -572,7 +631,7 @@ class AdminSetup {
 				'creating'           => __( 'Provisioning wallet on Base…', 'agentpay-by-cleardesk-seo' ),
 				'attaching'          => __( 'Verifying address…', 'agentpay-by-cleardesk-seo' ),
 				'copied'             => __( 'Copied', 'agentpay-by-cleardesk-seo' ),
-				'confirm_disconnect' => __( 'Disconnect this wallet from AgentPay? This stops new payments and refunds until you reconnect. In-flight transactions will continue.', 'agentpay-by-cleardesk-seo' ),
+				'confirm_disconnect' => __( 'Disconnect this wallet from ClearWallet? This stops new payments and refunds until you reconnect. In-flight transactions will continue.', 'agentpay-by-cleardesk-seo' ),
 			),
 		) );
 	}

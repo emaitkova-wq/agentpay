@@ -1,7 +1,12 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
+
+// phpcs:disable WordPress.DB.DirectDatabaseQuery -- transactional plugin; wp_cache would yield stale reads of in-flight transactions/disputes/fee sweeps. Hot paths already use $wpdb->prepare() for all user data.
+// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$tbl}/{$prefix} interpolation is the plugin's own table name ($wpdb->prefix . 'clearwallet_*'), not user input. WP 6.0 baseline can't use the %i identifier placeholder added in 6.2.
+// phpcs:disable PluginCheck.Security.DirectDB.UnescapedDBParameter -- same rationale as InterpolatedNotPrepared above.
+
 
 class FeeProcessor {
 
@@ -12,10 +17,10 @@ class FeeProcessor {
     /** Default sweep threshold: $1.00 = 1,000,000 atomic USDC */
     const DEFAULT_SWEEP_THRESHOLD = 1000000;
 
-    const PENDING_OPT     = 'agentpay_fee_pending_atomic';
-    const SWEPT_TOTAL_OPT = 'agentpay_fee_swept_total_atomic';
-    const LAST_SWEEP_OPT  = 'agentpay_fee_last_sweep_at';
-    const LOCK_TRANSIENT  = 'agentpay_fee_sweep_lock';
+    const PENDING_OPT     = 'clearwallet_fee_pending_atomic';
+    const SWEPT_TOTAL_OPT = 'clearwallet_fee_swept_total_atomic';
+    const LAST_SWEEP_OPT  = 'clearwallet_fee_last_sweep_at';
+    const LOCK_TRANSIENT  = 'clearwallet_fee_sweep_lock';
 
     public static function fee_for($amount_atomic) {
         $amt = (int) $amount_atomic;
@@ -47,7 +52,7 @@ class FeeProcessor {
         global $wpdb;
 
         $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT fee_atomic FROM {$wpdb->prefix}agentpay_transactions WHERE tx_hash = %s",
+            "SELECT fee_atomic FROM {$wpdb->prefix}clearwallet_transactions WHERE tx_hash = %s",
             $tx_hash
         ), ARRAY_A);
 
@@ -55,7 +60,7 @@ class FeeProcessor {
         if ((int) $row['fee_atomic'] > 0) { return 0; }
 
         $wpdb->update(
-            $wpdb->prefix . 'agentpay_transactions',
+            $wpdb->prefix . 'clearwallet_transactions',
             ['fee_atomic' => $fee, 'updated_at' => current_time('mysql', true)],
             ['tx_hash' => $tx_hash]
         );
@@ -68,7 +73,7 @@ class FeeProcessor {
     public static function reverse_fee($tx_hash) {
         global $wpdb;
         $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT fee_atomic, fee_reversed FROM {$wpdb->prefix}agentpay_transactions WHERE tx_hash = %s",
+            "SELECT fee_atomic, fee_reversed FROM {$wpdb->prefix}clearwallet_transactions WHERE tx_hash = %s",
             $tx_hash
         ), ARRAY_A);
 
@@ -82,7 +87,7 @@ class FeeProcessor {
         update_option(self::PENDING_OPT, max(0, $pending - $fee));
 
         $wpdb->update(
-            $wpdb->prefix . 'agentpay_transactions',
+            $wpdb->prefix . 'clearwallet_transactions',
             ['fee_reversed' => 1, 'updated_at' => current_time('mysql', true)],
             ['tx_hash' => $tx_hash]
         );
@@ -133,12 +138,12 @@ class FeeProcessor {
             $period_start = $last_sweep ?: gmdate('Y-m-d H:i:s', 0);
 
             $tx_count = (int) $wpdb->get_var($wpdb->prepare(
-                "SELECT COUNT(*) FROM {$wpdb->prefix}agentpay_transactions
+                "SELECT COUNT(*) FROM {$wpdb->prefix}clearwallet_transactions
                  WHERE created_at >= %s AND created_at <= %s AND fee_atomic > 0",
                 $period_start, $now
             ));
 
-            $wpdb->insert($wpdb->prefix . 'agentpay_fee_sweeps', [
+            $wpdb->insert($wpdb->prefix . 'clearwallet_fee_sweeps', [
                 'amount_atomic' => $pending,
                 'tx_count'      => $tx_count,
                 'period_start'  => $period_start,
@@ -148,9 +153,9 @@ class FeeProcessor {
             ]);
             $sweep_id = (int) $wpdb->insert_id;
 
-            $idempotency_key = 'agentpay_fee_sweep_' . $sweep_id;
+            $idempotency_key = 'clearwallet_fee_sweep_' . $sweep_id;
             $metadata = [
-                'type'     => 'agentpay_fee',
+                'type'     => 'clearwallet_fee',
                 'tx_count' => $tx_count,
                 'site'     => home_url(),
                 'period'   => $period_start . '/' . $now,
@@ -163,19 +168,19 @@ class FeeProcessor {
             }
 
             if (is_wp_error($result)) {
-                $wpdb->update($wpdb->prefix . 'agentpay_fee_sweeps', [
+                $wpdb->update($wpdb->prefix . 'clearwallet_fee_sweeps', [
                     'status'       => 'failed',
                     'error_msg'    => $result->get_error_message(),
                     'completed_at' => current_time('mysql', true),
                 ], ['id' => $sweep_id]);
                 delete_transient(self::LOCK_TRANSIENT);
-                do_action('agentpay_fee_sweep_failed', $sweep_id, $result);
+                do_action('clearwallet_fee_sweep_failed', $sweep_id, $result);
                 return ['error' => 'sweep_failed', 'message' => $result->get_error_message()];
             }
 
             $sweep_tx = $result['tx_hash'] ?? ($result['refund_tx'] ?? '');
 
-            $wpdb->update($wpdb->prefix . 'agentpay_fee_sweeps', [
+            $wpdb->update($wpdb->prefix . 'clearwallet_fee_sweeps', [
                 'status'       => 'completed',
                 'sweep_tx'     => $sweep_tx,
                 'completed_at' => current_time('mysql', true),
@@ -188,7 +193,7 @@ class FeeProcessor {
             update_option(self::LAST_SWEEP_OPT, $now);
 
             delete_transient(self::LOCK_TRANSIENT);
-            do_action('agentpay_fee_sweep_completed', $sweep_id, $pending, $result);
+            do_action('clearwallet_fee_sweep_completed', $sweep_id, $pending, $result);
 
             return [
                 'ok'            => true,

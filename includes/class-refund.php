@@ -1,7 +1,12 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
+
+// phpcs:disable WordPress.DB.DirectDatabaseQuery -- transactional plugin; wp_cache would yield stale reads of in-flight transactions/disputes/fee sweeps. Hot paths already use $wpdb->prepare() for all user data.
+// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$tbl}/{$prefix} interpolation is the plugin's own table name ($wpdb->prefix . 'clearwallet_*'), not user input. WP 6.0 baseline can't use the %i identifier placeholder added in 6.2.
+// phpcs:disable PluginCheck.Security.DirectDB.UnescapedDBParameter -- same rationale as InterpolatedNotPrepared above.
+
 
 class Refund {
 
@@ -21,10 +26,16 @@ class Refund {
         if (!Installer::setting('auto_refund_404', 1)) { return; }
 
         $current = Gate::current();
+        // Sanitize REQUEST_URI before concatenating into details (stored
+        // in DB and returned via REST). esc_url_raw + wp_unslash strips
+        // anything dangerous; default '/' if missing or invalid.
+        $req_uri = isset($_SERVER['REQUEST_URI'])
+            ? esc_url_raw(wp_unslash($_SERVER['REQUEST_URI']))
+            : '/';
         self::initiate(
             $current['tx_hash'],
             '404',
-            'Resource not found at ' . ($_SERVER['REQUEST_URI'] ?? '')
+            'Resource not found at ' . $req_uri
         );
     }
 
@@ -49,15 +60,15 @@ class Refund {
 
     public static function initiate(string $tx_hash, string $reason, string $details = '') {
         global $wpdb;
-        $tbl = $wpdb->prefix . 'agentpay_transactions';
+        $tbl = $wpdb->prefix . 'clearwallet_transactions';
 
         $tx = $wpdb->get_row($wpdb->prepare(
             "SELECT * FROM {$tbl} WHERE tx_hash = %s", $tx_hash
         ), ARRAY_A);
 
-        if (!$tx) { return new \WP_Error('agentpay_no_tx', 'Transaction not found'); }
+        if (!$tx) { return new \WP_Error('clearwallet_no_tx', 'Transaction not found'); }
         if ($tx['status'] !== 'paid') {
-            return new \WP_Error('agentpay_already_processed', 'Already ' . $tx['status']);
+            return new \WP_Error('clearwallet_already_processed', 'Already ' . $tx['status']);
         }
         if (empty($tx['agent_address'])) {
             return self::mark($tx_hash, 'refund_pending', $reason,
@@ -82,7 +93,7 @@ class Refund {
                 ['tx_hash' => $tx_hash]
             );
             Abuse::record($tx['agent_id'], 'refund_failed', $result->get_error_message());
-            do_action('agentpay_refund_failed', $tx_hash, $reason, $result);
+            do_action('clearwallet_refund_failed', $tx_hash, $reason, $result);
             return $result;
         }
 
@@ -95,13 +106,13 @@ class Refund {
 
         FeeProcessor::reverse_fee($tx_hash);
 
-        do_action('agentpay_refunded', $tx_hash, $reason, $result['refund_tx']);
+        do_action('clearwallet_refunded', $tx_hash, $reason, $result['refund_tx']);
         return $result;
     }
 
     protected static function mark(string $tx_hash, string $status, string $reason, string $details) {
         global $wpdb;
-        $wpdb->update($wpdb->prefix . 'agentpay_transactions', [
+        $wpdb->update($wpdb->prefix . 'clearwallet_transactions', [
             'status'        => $status,
             'refund_reason' => $reason,
             'updated_at'    => current_time('mysql', true),

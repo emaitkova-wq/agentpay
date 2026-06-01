@@ -4,7 +4,7 @@
  *
  * Direct PHP implementation of the CDP v2 REST API authentication, so the
  * WordPress operator never needs Node.js, the CDP SDK, or the CDP CLI to
- * provision a wallet for AgentPay.
+ * provision a wallet for ClearWallet.
  *
  * Authentication primer (verified against docs.cdp.coinbase.com Jan 2026):
  *
@@ -32,13 +32,13 @@
  *   POST /platform/v2/evm/accounts                  create a new EVM account
  *   GET  /platform/v2/evm/accounts/{address}        verify a specific account
  *
- * @package AgentPay
+ * @package ClearWallet
  * @since   1.1.0
  */
 
-namespace AgentPay;
+namespace ClearWallet;
 
-if ( ! defined( 'ABSPATH' ) && ! defined( 'AGENTPAY_TESTING' ) ) {
+if ( ! defined( 'ABSPATH' ) && ! defined( 'CLEARWALLET_TESTING' ) ) {
 	exit;
 }
 
@@ -52,6 +52,11 @@ class CdpClient {
 	// Key type constants for API Secret format detection.
 	const KEY_TYPE_ED25519 = 'ed25519';
 	const KEY_TYPE_ES256   = 'es256';
+
+	// USDC contract addresses by network. Used for gasless EIP-3009
+	// transfers (fee sweeps and refunds) and the EIP-712 signing domain.
+	const USDC_BASE          = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+	const USDC_BASE_SEPOLIA  = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 
 	/** @var string */
 	private $api_key_id;
@@ -103,9 +108,9 @@ class CdpClient {
 	 * @param string $name 2-36 chars, alphanumeric + hyphens. Auto-sanitized.
 	 * @return array|\WP_Error { address, name, policies, created_at, updated_at }
 	 */
-	public function create_evm_account( $name = 'agentpay' ) {
+	public function create_evm_account( $name = 'clearwallet' ) {
 		if ( empty( $this->wallet_secret ) ) {
-			return self::error( 'agentpay_wallet_secret_required',
+			return self::error( 'clearwallet_wallet_secret_required',
 				'Creating a wallet requires a Wallet Secret. Generate one in the Coinbase Developer Portal.' );
 		}
 
@@ -118,7 +123,7 @@ class CdpClient {
 		}
 
 		if ( empty( $result['address'] ) ) {
-			return self::error( 'agentpay_cdp_no_address',
+			return self::error( 'clearwallet_cdp_no_address',
 				'CDP returned a response without an address.', $result );
 		}
 
@@ -128,6 +133,127 @@ class CdpClient {
 			'policies'   => isset( $result['policies'] ) ? $result['policies'] : array(),
 			'created_at' => isset( $result['createdAt'] ) ? $result['createdAt'] : null,
 			'updated_at' => isset( $result['updatedAt'] ) ? $result['updatedAt'] : null,
+		);
+	}
+
+	/**
+	 * USDC contract address for a given network.
+	 *
+	 * @param string $network 'base' or 'base-sepolia'.
+	 * @return string Checksummed contract address.
+	 */
+	public static function usdc_contract( $network ) {
+		return ( 'base-sepolia' === $network ) ? self::USDC_BASE_SEPOLIA : self::USDC_BASE;
+	}
+
+	/**
+	 * Build a CdpClient from the credentials saved in the WordPress options
+	 * table. Decrypts the API Key Secret and Wallet Secret via AdminSetup's
+	 * at-rest encryption. Returns a ready-to-use client or a WP_Error if the
+	 * operator hasn't connected CDP yet.
+	 *
+	 * @return CdpClient|\WP_Error
+	 */
+	public static function from_stored_credentials() {
+		$id         = get_option( 'clearwallet_cdp_api_key_id', '' );
+		$secret_enc = get_option( 'clearwallet_cdp_api_key_secret', '' );
+		$wallet_enc = get_option( 'clearwallet_cdp_wallet_secret', '' );
+
+		if ( empty( $id ) || empty( $secret_enc ) ) {
+			return self::error(
+				'clearwallet_no_credentials',
+				'CDP credentials are not configured. Connect your Coinbase Developer Platform keys in ClearWallet → Setup.'
+			);
+		}
+
+		$secret = class_exists( '\ClearWallet\AdminSetup' ) ? AdminSetup::decrypt( $secret_enc ) : $secret_enc;
+		$wallet = '';
+		if ( ! empty( $wallet_enc ) ) {
+			$wallet = class_exists( '\ClearWallet\AdminSetup' ) ? AdminSetup::decrypt( $wallet_enc ) : $wallet_enc;
+		}
+
+		return new self( $id, $secret, $wallet ?: null );
+	}
+
+	/**
+	 * Sign an EIP-3009 transferWithAuthorization message as this wallet, via
+	 * CDP's /sign/typed-data endpoint. The signed authorization can be relayed
+	 * by any party (the x402 facilitator, here) to execute the USDC transfer
+	 * on-chain — this wallet never needs ETH for gas.
+	 *
+	 * This is the same primitive an agent uses to pay a merchant in x402: the
+	 * token holder signs an off-chain typed-data authorization and a relayer
+	 * broadcasts the on-chain transferWithAuthorization() call, paying gas.
+	 *
+	 * @param string $from          This wallet's address (0x...).
+	 * @param string $to            Destination address (0x...).
+	 * @param int    $amount_atomic Amount in USDC atomic units (6 decimals).
+	 * @param string $network       'base' or 'base-sepolia'.
+	 * @return array|\WP_Error { authorization: array, signature: string } or error.
+	 */
+	public function sign_eip3009_authorization( $from, $to, $amount_atomic, $network ) {
+		if ( empty( $this->wallet_secret ) ) {
+			return self::error( 'clearwallet_no_wallet_secret',
+				'Wallet Secret is required to sign transfer authorizations.' );
+		}
+
+		$now = time();
+		$authorization = array(
+			'from'        => $from,
+			'to'          => $to,
+			'value'       => (string) $amount_atomic,
+			'validAfter'  => '0',
+			'validBefore' => (string) ( $now + 300 ),
+			'nonce'       => '0x' . bin2hex( random_bytes( 32 ) ),
+		);
+
+		// USDC's EIP-712 domain. The contract reports name "USDC" on Base
+		// Sepolia and "USD Coin" on Base mainnet — both version "2".
+		$chain_id    = ( 'base-sepolia' === $network ) ? 84532 : 8453;
+		$domain_name = ( 'base-sepolia' === $network ) ? 'USDC' : 'USD Coin';
+
+		$typed_data = array(
+			'domain' => array(
+				'name'              => $domain_name,
+				'version'           => '2',
+				'chainId'           => $chain_id,
+				'verifyingContract' => self::usdc_contract( $network ),
+			),
+			'types' => array(
+				'EIP712Domain' => array(
+					array( 'name' => 'name',              'type' => 'string'  ),
+					array( 'name' => 'version',           'type' => 'string'  ),
+					array( 'name' => 'chainId',           'type' => 'uint256' ),
+					array( 'name' => 'verifyingContract', 'type' => 'address' ),
+				),
+				'TransferWithAuthorization' => array(
+					array( 'name' => 'from',        'type' => 'address' ),
+					array( 'name' => 'to',          'type' => 'address' ),
+					array( 'name' => 'value',       'type' => 'uint256' ),
+					array( 'name' => 'validAfter',  'type' => 'uint256' ),
+					array( 'name' => 'validBefore', 'type' => 'uint256' ),
+					array( 'name' => 'nonce',       'type' => 'bytes32' ),
+				),
+			),
+			'primaryType' => 'TransferWithAuthorization',
+			'message'     => $authorization,
+		);
+
+		$path   = '/evm/accounts/' . rawurlencode( $from ) . '/sign/typed-data';
+		$result = $this->request( 'POST', $path, $typed_data, true );
+		if ( self::is_error( $result ) ) {
+			return $result;
+		}
+
+		$signature = isset( $result['signature'] ) ? $result['signature'] : '';
+		if ( empty( $signature ) || 0 !== strpos( $signature, '0x' ) ) {
+			return self::error( 'clearwallet_no_signature',
+				'CDP /sign/typed-data did not return a signature.', $result );
+		}
+
+		return array(
+			'authorization' => $authorization,
+			'signature'     => $signature,
 		);
 	}
 
@@ -143,7 +269,7 @@ class CdpClient {
 		$address = trim( (string) $address );
 
 		if ( ! preg_match( '/^0x[a-fA-F0-9]{40}$/', $address ) ) {
-			return self::error( 'agentpay_invalid_address',
+			return self::error( 'clearwallet_invalid_address',
 				'That doesn\'t look like a Base/Ethereum address. It should start with 0x and have 40 hex characters after.' );
 		}
 
@@ -151,7 +277,7 @@ class CdpClient {
 		if ( self::is_error( $result ) ) {
 			$data = method_exists( $result, 'get_error_data' ) ? $result->get_error_data() : null;
 			if ( is_array( $data ) && isset( $data['status_code'] ) && 404 === $data['status_code'] ) {
-				return self::error( 'agentpay_address_not_in_project',
+				return self::error( 'clearwallet_address_not_in_project',
 					'That address exists on Base but isn\'t in this Coinbase Developer project. Check that you pasted the right address and that your API key matches the project that owns the wallet.' );
 			}
 			return $result;
@@ -197,7 +323,13 @@ class CdpClient {
 		);
 
 		if ( null !== $body ) {
-			$args['body'] = wp_json_encode( $body );
+			// Send canonical JSON (alphabetically-sorted keys, no extra
+			// whitespace) so the bytes on the wire match the reqHash computed
+			// inside the wallet-auth JWT. For single-field bodies this equals
+			// wp_json_encode, but for multi-field bodies (e.g. typed-data
+			// signing) insertion-order encoding would hash differently than
+			// the canonical reqHash and CDP would reject the X-Wallet-Auth.
+			$args['body'] = self::json_encode_canonical( self::sort_keys_deep( $body ) );
 		}
 
 		$url = 'https://' . self::API_HOST . self::API_BASE . $path;
@@ -216,7 +348,7 @@ class CdpClient {
 			$msg = $this->translate_cdp_error( $code, $data );
 			$this->last_error = $msg;
 			return self::error(
-				'agentpay_cdp_http_' . $code,
+				'clearwallet_cdp_http_' . $code,
 				$msg,
 				array(
 					'status_code' => $code,
@@ -318,7 +450,7 @@ class CdpClient {
 	 */
 	public function generate_wallet_auth_jwt( $method, $path, $body ) {
 		if ( empty( $this->wallet_secret ) ) {
-			return self::error( 'agentpay_no_wallet_secret', 'Wallet Secret not configured.' );
+			return self::error( 'clearwallet_no_wallet_secret', 'Wallet Secret not configured.' );
 		}
 
 		$now     = time();
@@ -410,12 +542,12 @@ class CdpClient {
 	 */
 	private function sign_ed25519( $message, $secret_b64 ) {
 		if ( ! function_exists( 'sodium_crypto_sign_detached' ) ) {
-			return self::error( 'agentpay_no_sodium', 'PHP sodium extension required for Ed25519 keys. Use an ES256 API key in CDP or upgrade PHP.' );
+			return self::error( 'clearwallet_no_sodium', 'PHP sodium extension required for Ed25519 keys. Use an ES256 API key in CDP or upgrade PHP.' );
 		}
 
 		$decoded = base64_decode( $secret_b64, true );
 		if ( false === $decoded || 64 !== strlen( $decoded ) ) {
-			return self::error( 'agentpay_bad_ed25519_key',
+			return self::error( 'clearwallet_bad_ed25519_key',
 				'API Key Secret is not a valid Ed25519 key. Expected base64 that decodes to 64 bytes.' );
 		}
 
@@ -424,7 +556,7 @@ class CdpClient {
 		try {
 			return sodium_crypto_sign_detached( $message, $decoded );
 		} catch ( \Throwable $e ) {
-			return self::error( 'agentpay_ed25519_sign_failed', 'Ed25519 signing failed: ' . $e->getMessage() );
+			return self::error( 'clearwallet_ed25519_sign_failed', 'Ed25519 signing failed: ' . $e->getMessage() );
 		}
 	}
 
@@ -439,14 +571,14 @@ class CdpClient {
 	private function sign_es256_pem( $message, $pem ) {
 		$pkey = openssl_pkey_get_private( $pem );
 		if ( false === $pkey ) {
-			return self::error( 'agentpay_bad_es256_pem',
+			return self::error( 'clearwallet_bad_es256_pem',
 				'Could not parse the EC private key. Verify it includes the BEGIN/END lines exactly as exported.' );
 		}
 
 		$sig_der = '';
 		$ok      = openssl_sign( $message, $sig_der, $pkey, OPENSSL_ALGO_SHA256 );
 		if ( ! $ok ) {
-			return self::error( 'agentpay_es256_sign_failed', 'ES256 signing failed.' );
+			return self::error( 'clearwallet_es256_sign_failed', 'ES256 signing failed.' );
 		}
 
 		return self::ecdsa_der_to_raw( $sig_der, 32 );
@@ -492,16 +624,32 @@ class CdpClient {
 	 * The CDP Wallet Secret is the inner base64 of a PKCS8 EC private key.
 	 * @internal Public for test coverage.
 	 */
-	public function wallet_secret_to_pem( $b64 ) {
-		$decoded = base64_decode( str_replace( array( "\n", "\r", ' ' ), '', $b64 ), true );
-		if ( false === $decoded || strlen( $decoded ) < 32 ) {
-			return self::error( 'agentpay_bad_wallet_secret',
-				'Wallet Secret is not a valid base64-encoded private key.' );
+	public function wallet_secret_to_pem( $secret ) {
+		$secret = (string) $secret;
+
+		// Case 1: already PEM. Normalize escaped/CRLF newlines and return.
+		if ( false !== strpos( $secret, '-----BEGIN' ) ) {
+			$pem = str_replace( array( "\\n", "\r\n", "\r" ), array( "\n", "\n", "\n" ), $secret );
+			return rtrim( $pem ) . "\n";
 		}
-		$pem = "-----BEGIN PRIVATE KEY-----\n"
+
+		// Cases 2 & 3: base64 or base64url of PKCS#8 DER. Strip whitespace,
+		// translate the base64url alphabet to standard, then decode.
+		$clean   = str_replace( array( "\n", "\r", ' ', "\t" ), '', $secret );
+		$clean   = strtr( $clean, '-_', '+/' );
+		$decoded = base64_decode( $clean, true );
+
+		if ( false === $decoded || strlen( $decoded ) < 48 ) {
+			return self::error(
+				'clearwallet_bad_wallet_secret',
+				'Wallet Secret is not a valid base64-encoded PKCS#8 key (expected ≥48 bytes, ' .
+				'typically ~138 for EC P-256). Re-copy the Wallet Secret value from the CDP portal.'
+			);
+		}
+
+		return "-----BEGIN PRIVATE KEY-----\n"
 			. chunk_split( base64_encode( $decoded ), 64, "\n" )
 			. "-----END PRIVATE KEY-----\n";
-		return $pem;
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -529,7 +677,7 @@ class CdpClient {
 		$offset = 0;
 		$len    = strlen( $der );
 		if ( $len < 2 || "\x30" !== $der[ $offset ] ) {
-			return self::error( 'agentpay_bad_der', 'ECDSA DER missing SEQUENCE tag.' );
+			return self::error( 'clearwallet_bad_der', 'ECDSA DER missing SEQUENCE tag.' );
 		}
 		$offset++;
 
@@ -559,10 +707,10 @@ class CdpClient {
 		$r = $parse_int();
 		$s = $parse_int();
 		if ( false === $r || false === $s ) {
-			return self::error( 'agentpay_bad_der', 'ECDSA DER missing R or S integer.' );
+			return self::error( 'clearwallet_bad_der', 'ECDSA DER missing R or S integer.' );
 		}
 		if ( strlen( $r ) > $coord_len || strlen( $s ) > $coord_len ) {
-			return self::error( 'agentpay_bad_der', 'ECDSA R/S exceeds coordinate length.' );
+			return self::error( 'clearwallet_bad_der', 'ECDSA R/S exceeds coordinate length.' );
 		}
 
 		$r = str_pad( $r, $coord_len, "\x00", STR_PAD_LEFT );
@@ -575,7 +723,7 @@ class CdpClient {
 		$name = preg_replace( '/[^a-z0-9-]/', '-', $name );
 		$name = trim( preg_replace( '/-+/', '-', $name ), '-' );
 		if ( strlen( $name ) < 2 ) {
-			$name = 'agentpay-' . substr( md5( uniqid( '', true ) ), 0, 8 );
+			$name = 'clearwallet-' . substr( md5( uniqid( '', true ) ), 0, 8 );
 		}
 		return substr( $name, 0, 36 );
 	}

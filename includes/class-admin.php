@@ -1,43 +1,76 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
+
+// phpcs:disable WordPress.DB.DirectDatabaseQuery -- transactional plugin; wp_cache would yield stale reads of in-flight transactions/disputes/fee sweeps. Hot paths already use $wpdb->prepare() for all user data.
+// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$tbl}/{$prefix} interpolation is the plugin's own table name ($wpdb->prefix . 'clearwallet_*'), not user input. WP 6.0 baseline can't use the %i identifier placeholder added in 6.2.
+// phpcs:disable PluginCheck.Security.DirectDB.UnescapedDBParameter -- same rationale as InterpolatedNotPrepared above.
+
 
 class Admin {
 
     public static function add_menu() {
         add_management_page(
-            'AgentPay',
-            'AgentPay',
+            'ClearWallet',
+            'ClearWallet',
             'manage_options',
-            'agentpay',
+            'clearwallet',
             [__CLASS__, 'render_page']
         );
     }
 
     public static function register_settings() {
-        register_setting('agentpay_group', AGENTPAY_OPT, [
+        register_setting('clearwallet_group', CLEARWALLET_OPT, [
             'sanitize_callback' => [__CLASS__, 'sanitize'],
         ]);
     }
 
     public static function sanitize($input) {
-        $out = get_option(AGENTPAY_OPT, []);
+        $out = get_option(CLEARWALLET_OPT, []);
         if (!is_array($input)) { return $out; }
 
         $bool = ['enabled', 'auto_refund_404', 'auto_refund_5xx', 'auto_refund_timeout',
-                 'stripe_record_revenue', 'detector_strict'];
+                 'detector_strict'];
         foreach ($bool as $k) { $out[$k] = !empty($input[$k]) ? 1 : 0; }
 
-        $text = ['payto_wallet', 'facilitator_url', 'coinbase_api_key', 'coinbase_api_secret',
-                 'coinbase_wallet_id', 'network', 'usdc_contract', 'stripe_account_id',
-                 'stripe_secret_key', 'dispute_email', 'abuse_blocklist'];
-        foreach ($text as $k) {
+        // Per-field sanitization. sanitize_text_field is wrong for URLs (strips
+        // some valid chars), emails (doesn't validate format), and secrets/keys
+        // (collapses the newlines that PEM-encoded keys structurally require).
+        $url_fields    = ['facilitator_url'];
+        $email_fields  = ['dispute_email'];
+        $wallet_fields = ['payto_wallet'];
+        $secret_fields = [];
+        $text_fields   = ['network', 'usdc_contract'];
+        $textarea_fields = ['abuse_blocklist'];
+
+        foreach ($url_fields as $k) {
+            if (isset($input[$k])) { $out[$k] = esc_url_raw(wp_unslash($input[$k])); }
+        }
+        foreach ($email_fields as $k) {
             if (isset($input[$k])) {
-                $out[$k] = ($k === 'abuse_blocklist')
-                    ? sanitize_textarea_field($input[$k])
-                    : sanitize_text_field($input[$k]);
+                $email = sanitize_email(wp_unslash($input[$k]));
+                $out[$k] = is_email($email) ? $email : '';
             }
+        }
+        foreach ($wallet_fields as $k) {
+            if (isset($input[$k])) {
+                // Wallet addresses are alphanumeric only (EVM hex or Stripe acct_/wallet_)
+                $val = sanitize_text_field(wp_unslash($input[$k]));
+                $out[$k] = preg_replace('/[^A-Za-z0-9_\-]/', '', $val);
+            }
+        }
+        foreach ($secret_fields as $k) {
+            // Keys/secrets may contain PEM newlines, base64, or hex. Strip only
+            // null bytes and control chars (except LF/TAB); keep everything else
+            // so the underlying format isn't corrupted before encryption.
+            if (isset($input[$k])) { $out[$k] = self::sanitize_secret(wp_unslash($input[$k])); }
+        }
+        foreach ($text_fields as $k) {
+            if (isset($input[$k])) { $out[$k] = sanitize_text_field(wp_unslash($input[$k])); }
+        }
+        foreach ($textarea_fields as $k) {
+            if (isset($input[$k])) { $out[$k] = sanitize_textarea_field(wp_unslash($input[$k])); }
         }
 
         $int = ['session_ttl', 'session_page_budget', 'timeout_threshold_ms',
@@ -60,11 +93,32 @@ class Admin {
         return $out;
     }
 
+    /**
+     * Sanitize a secret/key value while preserving PEM newlines and base64
+     * characters. Strips only null bytes and control chars other than LF/TAB.
+     * sanitize_text_field collapses whitespace and would corrupt PEM keys.
+     */
+    private static function sanitize_secret($value) {
+        if (!is_string($value)) { return ''; }
+        $value = str_replace("\0", '', $value);                 // null bytes
+        $value = str_replace("\r\n", "\n", $value);             // normalize line endings
+        $value = preg_replace('/[^\x09\x0A\x20-\x7E]/', '', $value);  // tab/LF/printable ASCII only
+        if (strlen($value) > 8192) {
+            $value = substr($value, 0, 8192);
+        }
+        return trim($value);
+    }
+
     public static function render_page() {
         if (!current_user_can('manage_options')) { wp_die('Forbidden'); }
-        $tab = $_GET['tab'] ?? 'config';
+        // Whitelist allowed tab values to prevent any reflected-XSS or path
+        // tampering via $_GET['tab']. UI-only router parameter, no state change.
+        $allowed_tabs = ['config', 'dashboard', 'fees', 'disputes', 'logs', 'setup', 'docs'];
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- UI-only tab router, no state change
+        $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash($_GET['tab'])) : 'config';
+        if (!in_array($tab, $allowed_tabs, true)) { $tab = 'config'; }
 
-        echo '<div class="wrap"><h1>AgentPay <span style="font-size:14px;color:#646970;font-weight:normal;">by ClearDesk SEO</span></h1>';
+        echo '<div class="wrap"><h1>ClearWallet <span style="font-size:14px;color:#646970;font-weight:normal;">by ClearDesk SEO</span></h1>';
         self::render_tabs($tab);
 
         switch ($tab) {
@@ -92,25 +146,25 @@ class Admin {
         echo '<h2 class="nav-tab-wrapper">';
         foreach ($tabs as $key => $label) {
             $active = $key === $current ? ' nav-tab-active' : '';
-            $url = admin_url('tools.php?page=agentpay&tab=' . $key);
-            echo '<a href="' . esc_url($url) . '" class="nav-tab' . $active . '">' . esc_html($label) . '</a>';
+            $url = admin_url('tools.php?page=clearwallet&tab=' . $key);
+            echo '<a href="' . esc_url($url) . '" class="nav-tab' . esc_attr($active) . '">' . esc_html($label) . '</a>';
         }
         echo '</h2>';
     }
 
     protected static function render_config() {
-        $s = get_option(AGENTPAY_OPT, []);
-        $opt = AGENTPAY_OPT;
+        $s = get_option(CLEARWALLET_OPT, []);
+        $opt = CLEARWALLET_OPT;
         ?>
         <form method="post" action="options.php">
-            <?php settings_fields('agentpay_group'); ?>
+            <?php settings_fields('clearwallet_group'); ?>
 
             <h2>General</h2>
             <table class="form-table" role="presentation">
                 <tr>
                     <th><label>Enable agent paywall</label></th>
                     <td>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[enabled]" value="1" <?php checked(!empty($s['enabled'])); ?> />
+                        <label><input type="checkbox" name="<?php echo esc_attr($opt); ?>[enabled]" value="1" <?php checked(!empty($s['enabled'])); ?> />
                         Intercept agent requests and require payment</label>
                     </td>
                 </tr>
@@ -118,17 +172,17 @@ class Admin {
                     <th><label for="payto_wallet">PayTo wallet (Base USDC)</label></th>
                     <td>
                         <input id="payto_wallet" type="text" class="regular-text code"
-                            name="<?php echo $opt; ?>[payto_wallet]"
+                            name="<?php echo esc_attr($opt); ?>[payto_wallet]"
                             value="<?php echo esc_attr($s['payto_wallet'] ?? ''); ?>"
                             placeholder="0x..." />
                         <p class="description">Your USDC-on-Base wallet address. Funds settle here before off-ramp.
-                            <a href="<?php echo esc_url(admin_url('tools.php?page=agentpay&tab=setup#payto-wallet')); ?>">Where do I find this?</a></p>
+                            <a href="<?php echo esc_url(admin_url('tools.php?page=clearwallet&tab=setup#payto-wallet')); ?>">Where do I find this?</a></p>
                     </td>
                 </tr>
                 <tr>
                     <th><label>Network</label></th>
                     <td>
-                        <select name="<?php echo $opt; ?>[network]">
+                        <select name="<?php echo esc_attr($opt); ?>[network]">
                             <option value="base" <?php selected($s['network'] ?? 'base', 'base'); ?>>Base mainnet</option>
                             <option value="base-sepolia" <?php selected($s['network'] ?? '', 'base-sepolia'); ?>>Base Sepolia (testnet)</option>
                         </select>
@@ -137,14 +191,14 @@ class Admin {
                 <tr>
                     <th><label>USDC contract</label></th>
                     <td>
-                        <input type="text" class="regular-text code" name="<?php echo $opt; ?>[usdc_contract]"
+                        <input type="text" class="regular-text code" name="<?php echo esc_attr($opt); ?>[usdc_contract]"
                             value="<?php echo esc_attr($s['usdc_contract'] ?? ''); ?>" />
                     </td>
                 </tr>
                 <tr>
                     <th><label>Strict detector</label></th>
                     <td>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[detector_strict]" value="1" <?php checked(!empty($s['detector_strict'])); ?> />
+                        <label><input type="checkbox" name="<?php echo esc_attr($opt); ?>[detector_strict]" value="1" <?php checked(!empty($s['detector_strict'])); ?> />
                         Also gate on headless-browser heuristics (may catch false positives)</label>
                     </td>
                 </tr>
@@ -155,34 +209,9 @@ class Admin {
                 <tr>
                     <th><label>Facilitator URL</label></th>
                     <td>
-                        <input type="url" class="regular-text code" name="<?php echo $opt; ?>[facilitator_url]"
+                        <input type="url" class="regular-text code" name="<?php echo esc_attr($opt); ?>[facilitator_url]"
                             value="<?php echo esc_attr($s['facilitator_url'] ?? ''); ?>" />
-                        <p class="description">Default: <code>https://api.cdp.coinbase.com/platform/v2/x402</code></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th><label>Coinbase API key</label></th>
-                    <td>
-                        <input type="text" class="regular-text" name="<?php echo $opt; ?>[coinbase_api_key]"
-                            value="<?php echo esc_attr($s['coinbase_api_key'] ?? ''); ?>" autocomplete="off" />
-                        <p class="description">From Coinbase Developer Platform. Required for settle calls and refunds.
-                            <a href="<?php echo esc_url(admin_url('tools.php?page=agentpay&tab=setup#coinbase-keys')); ?>">Where do I find this?</a></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th><label>Coinbase API secret</label></th>
-                    <td>
-                        <input type="password" class="regular-text" name="<?php echo $opt; ?>[coinbase_api_secret]"
-                            value="<?php echo esc_attr($s['coinbase_api_secret'] ?? ''); ?>" autocomplete="off" />
-                    </td>
-                </tr>
-                <tr>
-                    <th><label>Coinbase wallet ID (non-custodial)</label></th>
-                    <td>
-                        <input type="text" class="regular-text code" name="<?php echo $opt; ?>[coinbase_wallet_id]"
-                            value="<?php echo esc_attr($s['coinbase_wallet_id'] ?? ''); ?>" />
-                        <p class="description">Server wallet used to push refunds.
-                            <a href="<?php echo esc_url(admin_url('tools.php?page=agentpay&tab=setup#coinbase-keys')); ?>">Where do I find this?</a></p>
+                        <p class="description">Leave blank to auto-select by network: <code>www.x402.org</code> on Base Sepolia (no auth), <code>api.cdp.coinbase.com</code> on Base mainnet (uses your CDP credentials from the Setup tab). Override only for a custom facilitator.</p>
                     </td>
                 </tr>
                 <tr>
@@ -190,60 +219,11 @@ class Admin {
                     <td>
                         <?php
                         $url = wp_nonce_url(
-                            admin_url('admin-post.php?action=agentpay_test_facilitator'),
-                            'agentpay_test'
+                            admin_url('admin-post.php?action=clearwallet_test_facilitator'),
+                            'clearwallet_test'
                         );
                         ?>
                         <a href="<?php echo esc_url($url); ?>" class="button">Test facilitator connection</a>
-                    </td>
-                </tr>
-            </table>
-
-            <h2>Stripe off-ramp</h2>
-            <table class="form-table" role="presentation">
-                <tr>
-                    <th><label>Stripe account ID</label></th>
-                    <td>
-                        <input type="text" class="regular-text code" name="<?php echo $opt; ?>[stripe_account_id]"
-                            value="<?php echo esc_attr($s['stripe_account_id'] ?? ''); ?>"
-                            placeholder="acct_..." />
-                    </td>
-                </tr>
-                <tr>
-                    <th><label>Stripe secret key</label></th>
-                    <td>
-                        <input type="password" class="regular-text" name="<?php echo $opt; ?>[stripe_secret_key]"
-                            value="<?php echo esc_attr($s['stripe_secret_key'] ?? ''); ?>" autocomplete="off"
-                            placeholder="sk_live_..." />
-                        <p class="description">Used to record USDC settlements in Stripe for reconciliation.
-                        USDC → USD payouts must be configured in your Stripe dashboard.
-                            <a href="<?php echo esc_url(admin_url('tools.php?page=agentpay&tab=setup#stripe-keys')); ?>">Where do I find this?</a></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th><label>Record revenue to Stripe</label></th>
-                    <td>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[stripe_record_revenue]" value="1" <?php checked(!empty($s['stripe_record_revenue'])); ?> />
-                        Log each settlement as a Stripe Treasury entry</label>
-                    </td>
-                </tr>
-                <tr>
-                    <th>Status</th>
-                    <td>
-                        <?php
-                        $status = Stripe::status_summary();
-                        if ($status['ok']) {
-                            echo '<span style="color: #007a3d;">✓ Connected</span>';
-                            if (!empty($status['business_name'])) {
-                                echo ' — ' . esc_html($status['business_name']);
-                            }
-                            if (!empty($status['payouts_enabled'])) {
-                                echo ' · payouts enabled';
-                            }
-                        } else {
-                            echo '<span style="color: #a62a2a;">✗ ' . esc_html($status['msg']) . '</span>';
-                        }
-                        ?>
                     </td>
                 </tr>
             </table>
@@ -255,9 +235,9 @@ class Admin {
                     $val = (int) ($s['rate_card'][$action] ?? 0);
                     $usd = number_format($val / 1000000, 6); ?>
                 <tr>
-                    <th><label><?php echo ucfirst($action); ?> (atomic)</label></th>
+                    <th><label><?php echo esc_html(ucfirst($action)); ?> (atomic)</label></th>
                     <td>
-                        <input type="number" min="0" step="1" name="<?php echo $opt; ?>[rate_card][<?php echo $action; ?>]"
+                        <input type="number" min="0" step="1" name="<?php echo esc_attr($opt); ?>[rate_card][<?php echo esc_attr($action); ?>]"
                             value="<?php echo esc_attr($val); ?>" />
                         <span class="description">= $<?php echo esc_html($usd); ?></span>
                     </td>
@@ -269,12 +249,12 @@ class Admin {
             <table class="form-table" role="presentation">
                 <tr>
                     <th><label>Session TTL (seconds)</label></th>
-                    <td><input type="number" min="60" name="<?php echo $opt; ?>[session_ttl]"
+                    <td><input type="number" min="60" name="<?php echo esc_attr($opt); ?>[session_ttl]"
                         value="<?php echo esc_attr((int) ($s['session_ttl'] ?? 3600)); ?>" /></td>
                 </tr>
                 <tr>
                     <th><label>Pages per session</label></th>
-                    <td><input type="number" min="1" name="<?php echo $opt; ?>[session_page_budget]"
+                    <td><input type="number" min="1" name="<?php echo esc_attr($opt); ?>[session_page_budget]"
                         value="<?php echo esc_attr((int) ($s['session_page_budget'] ?? 50)); ?>" /></td>
                 </tr>
             </table>
@@ -284,27 +264,27 @@ class Admin {
                 <tr>
                     <th>Auto-refund</th>
                     <td>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[auto_refund_404]" value="1" <?php checked(!empty($s['auto_refund_404'])); ?> /> 404 (not found)</label><br>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[auto_refund_5xx]" value="1" <?php checked(!empty($s['auto_refund_5xx'])); ?> /> 5xx (server error)</label><br>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[auto_refund_timeout]" value="1" <?php checked(!empty($s['auto_refund_timeout'])); ?> /> Timeout (slow response)</label>
+                        <label><input type="checkbox" name="<?php echo esc_attr($opt); ?>[auto_refund_404]" value="1" <?php checked(!empty($s['auto_refund_404'])); ?> /> 404 (not found)</label><br>
+                        <label><input type="checkbox" name="<?php echo esc_attr($opt); ?>[auto_refund_5xx]" value="1" <?php checked(!empty($s['auto_refund_5xx'])); ?> /> 5xx (server error)</label><br>
+                        <label><input type="checkbox" name="<?php echo esc_attr($opt); ?>[auto_refund_timeout]" value="1" <?php checked(!empty($s['auto_refund_timeout'])); ?> /> Timeout (slow response)</label>
                     </td>
                 </tr>
                 <tr>
                     <th><label>Timeout threshold (ms)</label></th>
-                    <td><input type="number" min="1000" step="500" name="<?php echo $opt; ?>[timeout_threshold_ms]"
+                    <td><input type="number" min="1000" step="500" name="<?php echo esc_attr($opt); ?>[timeout_threshold_ms]"
                         value="<?php echo esc_attr((int) ($s['timeout_threshold_ms'] ?? 30000)); ?>" /></td>
                 </tr>
                 <tr>
                     <th><label>Auto-approve disputes ≤ (atomic)</label></th>
                     <td>
-                        <input type="number" min="0" step="100" name="<?php echo $opt; ?>[auto_approve_threshold]"
+                        <input type="number" min="0" step="100" name="<?php echo esc_attr($opt); ?>[auto_approve_threshold]"
                             value="<?php echo esc_attr((int) ($s['auto_approve_threshold'] ?? 10000)); ?>" />
                         <p class="description">Below this amount, qualifying disputes auto-refund without manual review.</p>
                     </td>
                 </tr>
                 <tr>
                     <th><label>Dispute notification email</label></th>
-                    <td><input type="email" class="regular-text" name="<?php echo $opt; ?>[dispute_email]"
+                    <td><input type="email" class="regular-text" name="<?php echo esc_attr($opt); ?>[dispute_email]"
                         value="<?php echo esc_attr($s['dispute_email'] ?? get_option('admin_email')); ?>" /></td>
                 </tr>
             </table>
@@ -313,23 +293,23 @@ class Admin {
             <table class="form-table" role="presentation">
                 <tr>
                     <th><label>Rate limit (req/min/agent)</label></th>
-                    <td><input type="number" min="0" name="<?php echo $opt; ?>[abuse_rate_per_min]"
+                    <td><input type="number" min="0" name="<?php echo esc_attr($opt); ?>[abuse_rate_per_min]"
                         value="<?php echo esc_attr((int) ($s['abuse_rate_per_min'] ?? 120)); ?>" /></td>
                 </tr>
                 <tr>
                     <th><label>Auto-block after N abuse events</label></th>
-                    <td><input type="number" min="1" name="<?php echo $opt; ?>[abuse_block_threshold]"
+                    <td><input type="number" min="1" name="<?php echo esc_attr($opt); ?>[abuse_block_threshold]"
                         value="<?php echo esc_attr((int) ($s['abuse_block_threshold'] ?? 20)); ?>" /></td>
                 </tr>
                 <tr>
                     <th><label>Block window (seconds)</label></th>
-                    <td><input type="number" min="60" name="<?php echo $opt; ?>[abuse_block_window]"
+                    <td><input type="number" min="60" name="<?php echo esc_attr($opt); ?>[abuse_block_window]"
                         value="<?php echo esc_attr((int) ($s['abuse_block_window'] ?? 600)); ?>" /></td>
                 </tr>
                 <tr>
                     <th><label>Manual blocklist</label></th>
                     <td>
-                        <textarea name="<?php echo $opt; ?>[abuse_blocklist]" rows="4" class="large-text code"
+                        <textarea name="<?php echo esc_attr($opt); ?>[abuse_blocklist]" rows="4" class="large-text code"
                             placeholder="One fingerprint or agent_id per line"><?php
                             echo esc_textarea($s['abuse_blocklist'] ?? '');
                         ?></textarea>
@@ -338,19 +318,19 @@ class Admin {
             </table>
 
             <h2>Plugin fee</h2>
-            <p class="description">A 1% fee per settled transaction supports continued development of AgentPay. Accumulated fees sweep on a schedule. See the <strong>Fees</strong> tab for details and manual control.</p>
+            <p class="description">A 1% fee per settled transaction supports continued development of ClearWallet. Accumulated fees sweep on a schedule. See the <strong>Fees</strong> tab for details and manual control.</p>
             <table class="form-table" role="presentation">
                 <tr>
                     <th><label>Auto-sweep enabled</label></th>
                     <td>
-                        <label><input type="checkbox" name="<?php echo $opt; ?>[fee_sweep_enabled]" value="1" <?php checked(!empty($s['fee_sweep_enabled'])); ?> />
+                        <label><input type="checkbox" name="<?php echo esc_attr($opt); ?>[fee_sweep_enabled]" value="1" <?php checked(!empty($s['fee_sweep_enabled'])); ?> />
                         Sweep accumulated fees daily once threshold is met</label>
                     </td>
                 </tr>
                 <tr>
                     <th><label>Sweep threshold (atomic)</label></th>
                     <td>
-                        <input type="number" min="0" step="1" name="<?php echo $opt; ?>[fee_sweep_threshold]"
+                        <input type="number" min="0" step="1" name="<?php echo esc_attr($opt); ?>[fee_sweep_threshold]"
                             value="<?php echo esc_attr((int) ($s['fee_sweep_threshold'] ?? 1000000)); ?>" />
                         <p class="description">Don't sweep until pending fees reach this amount. 1,000,000 = $1.00 (default).</p>
                     </td>
@@ -364,7 +344,7 @@ class Admin {
 
     protected static function render_dashboard() {
         global $wpdb;
-        $tbl = $wpdb->prefix . 'agentpay_transactions';
+        $tbl = $wpdb->prefix . 'clearwallet_transactions';
         $totals = $wpdb->get_row("
             SELECT
                 COUNT(*) AS total,
@@ -420,17 +400,17 @@ class Admin {
     protected static function render_fees() {
         global $wpdb;
 
-        $pending     = \AgentPay\FeeProcessor::pending_atomic();
-        $swept       = \AgentPay\FeeProcessor::swept_total_atomic();
-        $last_sweep  = \AgentPay\FeeProcessor::last_sweep_at();
-        $rate        = \AgentPay\FeeProcessor::fee_rate_percent();
-        $wallet      = \AgentPay\FeeProcessor::fee_wallet();
-        $threshold   = (int) \AgentPay\Installer::setting('fee_sweep_threshold', 1000000);
-        $sweep_enabled = (int) \AgentPay\Installer::setting('fee_sweep_enabled', 1);
-        $fee_status  = \AgentPay\FeeConfig::status();
+        $pending     = \ClearWallet\FeeProcessor::pending_atomic();
+        $swept       = \ClearWallet\FeeProcessor::swept_total_atomic();
+        $last_sweep  = \ClearWallet\FeeProcessor::last_sweep_at();
+        $rate        = \ClearWallet\FeeProcessor::fee_rate_percent();
+        $wallet      = \ClearWallet\FeeProcessor::fee_wallet();
+        $threshold   = (int) \ClearWallet\Installer::setting('fee_sweep_threshold', 1000000);
+        $sweep_enabled = (int) \ClearWallet\Installer::setting('fee_sweep_enabled', 1);
+        $fee_status  = \ClearWallet\FeeConfig::status();
 
         echo '<h2>Plugin fee</h2>';
-        echo '<p>AgentPay is open source and free to use. A <strong>' . esc_html(number_format($rate, 2)) .
+        echo '<p>ClearWallet is open source and free to use. A <strong>' . esc_html(number_format($rate, 2)) .
              '%</strong> fee on each settled USDC transaction is accumulated and periodically transferred from your wallet to support continued development.';
         echo ' The fee is paid from your configured USDC wallet — no third party touches your funds in between.</p>';
 
@@ -451,9 +431,11 @@ class Admin {
         echo '<table class="form-table" role="presentation">';
         echo '<tr><th>Fee rate</th><td>' . esc_html(number_format($rate, 2)) . '% per settled transaction</td></tr>';
         echo '<tr><th>Destination wallet (Base USDC)</th><td>';
-        echo $wallet
-            ? '<code>' . esc_html($wallet) . '</code>'
-            : '<em>Not available — fee config endpoint unreachable. Sweeps paused.</em>';
+        if ($wallet) {
+            echo '<code>' . esc_html($wallet) . '</code>';
+        } else {
+            echo '<em>Not available — fee config endpoint unreachable. Sweeps paused.</em>';
+        }
         echo '</td></tr>';
         echo '<tr><th>Pending (not yet swept)</th><td><strong>$' . esc_html(number_format($pending / 1000000, 6)) . '</strong> USDC</td></tr>';
         echo '<tr><th>Lifetime swept</th><td>$' . esc_html(number_format($swept / 1000000, 6)) . ' USDC</td></tr>';
@@ -464,8 +446,8 @@ class Admin {
         echo '</table>';
 
         $sweep_url = wp_nonce_url(
-            admin_url('admin-post.php?action=agentpay_sweep_fees'),
-            'agentpay_sweep_fees'
+            admin_url('admin-post.php?action=clearwallet_sweep_fees'),
+            'clearwallet_sweep_fees'
         );
         echo '<p style="margin-top:20px;">';
         if ($pending > 0) {
@@ -476,14 +458,14 @@ class Admin {
         }
         echo '</p>';
 
-        $result_msg = get_transient('agentpay_sweep_result');
+        $result_msg = get_transient('clearwallet_sweep_result');
         if ($result_msg) {
-            delete_transient('agentpay_sweep_result');
+            delete_transient('clearwallet_sweep_result');
             echo '<div class="notice notice-info"><p>' . esc_html($result_msg) . '</p></div>';
         }
 
         $sweep_rows = $wpdb->get_results(
-            "SELECT * FROM {$wpdb->prefix}agentpay_fee_sweeps ORDER BY id DESC LIMIT 50",
+            "SELECT * FROM {$wpdb->prefix}clearwallet_fee_sweeps ORDER BY id DESC LIMIT 50",
             ARRAY_A
         );
 
@@ -504,7 +486,7 @@ class Admin {
             echo '<td style="font-size:11px;">' . esc_html(substr($r['period_start'], 0, 10)) .
                  ' → ' . esc_html(substr($r['period_end'], 0, 10)) . '</td>';
             $status_color = ['completed' => '#007a3d', 'failed' => '#a62a2a', 'pending' => '#9c6f00'][$r['status']] ?? '#646970';
-            echo '<td><span style="color:' . $status_color . ';">' . esc_html($r['status']) . '</span></td>';
+            echo '<td><span style="color:' . esc_attr($status_color) . ';">' . esc_html($r['status']) . '</span></td>';
             echo '<td><code style="font-size:11px;">' . esc_html(substr($r['sweep_tx'] ?: '', 0, 20)) .
                  ($r['sweep_tx'] && strlen($r['sweep_tx']) > 20 ? '…' : '') . '</code></td>';
             echo '<td style="font-size:11px;">' . esc_html($r['created_at']) . '</td>';
@@ -521,8 +503,8 @@ class Admin {
         global $wpdb;
         $rows = $wpdb->get_results("
             SELECT d.*, t.resource, t.amount_atomic, t.agent_address
-            FROM {$wpdb->prefix}agentpay_disputes d
-            LEFT JOIN {$wpdb->prefix}agentpay_transactions t ON t.tx_hash = d.tx_hash
+            FROM {$wpdb->prefix}clearwallet_disputes d
+            LEFT JOIN {$wpdb->prefix}clearwallet_transactions t ON t.tx_hash = d.tx_hash
             ORDER BY d.id DESC LIMIT 100
         ", ARRAY_A);
 
@@ -534,8 +516,8 @@ class Admin {
         </tr></thead><tbody>';
         foreach ($rows as $r) {
             $url = wp_nonce_url(
-                admin_url('admin-post.php?action=agentpay_resolve_dispute&id=' . $r['id']),
-                'agentpay_resolve_' . $r['id']
+                admin_url('admin-post.php?action=clearwallet_resolve_dispute&id=' . $r['id']),
+                'clearwallet_resolve_' . $r['id']
             );
             echo '<tr>';
             echo '<td>' . esc_html($r['id']) . '</td>';
@@ -563,7 +545,7 @@ class Admin {
     protected static function render_logs() {
         global $wpdb;
         $rows = $wpdb->get_results(
-            "SELECT * FROM {$wpdb->prefix}agentpay_transactions ORDER BY id DESC LIMIT 200",
+            "SELECT * FROM {$wpdb->prefix}clearwallet_transactions ORDER BY id DESC LIMIT 200",
             ARRAY_A
         );
         echo '<h2>Recent transactions</h2>';
@@ -591,8 +573,8 @@ class Admin {
         // form, "Create wallet" vs "Use existing", loud Wallet Secret modal, and
         // success state with the receiving address — all without requiring the
         // operator to touch Node, the CDP SDK, or the CDP CLI.
-        if (class_exists('\AgentPay\AdminSetup')) {
-            \AgentPay\AdminSetup::render_setup_tab();
+        if (class_exists('\ClearWallet\AdminSetup')) {
+            \ClearWallet\AdminSetup::render_setup_tab();
             return;
         }
         echo '<p>Setup tab unavailable: AdminSetup class missing. Reinstall the plugin.</p>';
@@ -600,8 +582,8 @@ class Admin {
 
 
     protected static function render_docs() {
-        $rate_url = rest_url('agentpay/v1/rate-card');
-        $disp_url = rest_url('agentpay/v1/dispute');
+        $rate_url = rest_url('clearwallet/v1/rate-card');
+        $disp_url = rest_url('clearwallet/v1/dispute');
         ?>
         <h2>Endpoints for agents</h2>
         <p>Publish these to your <code>.well-known</code> or robots.txt so agents can discover the paywall:</p>
@@ -630,9 +612,9 @@ class Admin {
 
     public static function handle_test_facilitator() {
         if (!current_user_can('manage_options')) { wp_die('Forbidden'); }
-        check_admin_referer('agentpay_test');
+        check_admin_referer('clearwallet_test');
 
-        $url = rtrim(Installer::setting('facilitator_url', ''), '/') . '/supported';
+        $url = Facilitator::facilitator_base() . '/supported';
         $resp = wp_remote_get($url, ['timeout' => 10]);
 
         if (is_wp_error($resp)) {
@@ -640,29 +622,33 @@ class Admin {
         } else {
             $code = wp_remote_retrieve_response_code($resp);
             $body = wp_remote_retrieve_body($resp);
-            $msg = "HTTP {$code}: " . substr($body, 0, 200);
+            $msg = "Facilitator " . esc_html($url) . " — HTTP {$code}: " . substr($body, 0, 200);
         }
 
-        set_transient('agentpay_test_result', $msg, 60);
-        wp_safe_redirect(admin_url('tools.php?page=agentpay&tab=config'));
+        set_transient('clearwallet_test_result', $msg, 60);
+        wp_safe_redirect(admin_url('tools.php?page=clearwallet&tab=config'));
         exit;
     }
 
     public static function handle_resolve_dispute() {
         if (!current_user_can('manage_options')) { wp_die('Forbidden'); }
-        $id = (int) ($_GET['id'] ?? 0);
-        check_admin_referer('agentpay_resolve_' . $id);
+        // Sanitize id first so the nonce check uses a known-clean value.
+        $id = isset($_GET['id']) ? absint(wp_unslash($_GET['id'])) : 0;
+        check_admin_referer('clearwallet_resolve_' . $id);
 
-        $resolution = ($_GET['resolution'] ?? '') === 'refund' ? 'refund' : 'deny';
+        // Resolution is whitelisted against two valid values, so anything else
+        // collapses to 'deny'. wp_unslash + sanitize_key keeps PluginCheck happy.
+        $resolution_raw = isset($_GET['resolution']) ? sanitize_key(wp_unslash($_GET['resolution'])) : '';
+        $resolution = ($resolution_raw === 'refund') ? 'refund' : 'deny';
         Dispute::resolve($id, $resolution, 'manual:' . wp_get_current_user()->user_login);
 
-        wp_safe_redirect(admin_url('tools.php?page=agentpay&tab=disputes'));
+        wp_safe_redirect(admin_url('tools.php?page=clearwallet&tab=disputes'));
         exit;
     }
 
     public static function handle_sweep_fees() {
         if (!current_user_can('manage_options')) { wp_die('Forbidden'); }
-        check_admin_referer('agentpay_sweep_fees');
+        check_admin_referer('clearwallet_sweep_fees');
 
         $result = FeeProcessor::sweep();
 
@@ -679,8 +665,8 @@ class Admin {
             $msg = 'Sweep failed: ' . ($result['message'] ?? $result['error'] ?? 'unknown error');
         }
 
-        set_transient('agentpay_sweep_result', $msg, 60);
-        wp_safe_redirect(admin_url('tools.php?page=agentpay&tab=fees'));
+        set_transient('clearwallet_sweep_result', $msg, 60);
+        wp_safe_redirect(admin_url('tools.php?page=clearwallet&tab=fees'));
         exit;
     }
 }

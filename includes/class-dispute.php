@@ -1,12 +1,17 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
+
+// phpcs:disable WordPress.DB.DirectDatabaseQuery -- transactional plugin; wp_cache would yield stale reads of in-flight transactions/disputes/fee sweeps. Hot paths already use $wpdb->prepare() for all user data.
+// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$tbl}/{$prefix} interpolation is the plugin's own table name ($wpdb->prefix . 'clearwallet_*'), not user input. WP 6.0 baseline can't use the %i identifier placeholder added in 6.2.
+// phpcs:disable PluginCheck.Security.DirectDB.UnescapedDBParameter -- same rationale as InterpolatedNotPrepared above.
+
 
 class Dispute {
 
     public static function register_routes() {
-        register_rest_route('agentpay/v1', '/dispute', [
+        register_rest_route('clearwallet/v1', '/dispute', [
             [
                 'methods'             => 'POST',
                 'callback'            => [__CLASS__, 'submit'],
@@ -25,7 +30,7 @@ class Dispute {
             ],
         ]);
 
-        register_rest_route('agentpay/v1', '/rate-card', [
+        register_rest_route('clearwallet/v1', '/rate-card', [
             'methods'             => 'GET',
             'callback'            => [__CLASS__, 'rate_card'],
             'permission_callback' => '__return_true',
@@ -39,16 +44,22 @@ class Dispute {
 
         $allowed = ['no_content', 'wrong_content', '404', '5xx', 'timeout', 'corrupted', 'other'];
         if (!in_array($reason, $allowed, true)) {
-            return new \WP_Error('agentpay_invalid_reason', 'Invalid reason', ['status' => 400]);
+            return new \WP_Error('clearwallet_invalid_reason', 'Invalid reason', ['status' => 400]);
+        }
+
+        // tx_hash format: 0x-prefixed lowercase hex, 64 chars. Reject anything
+        // else cheaply, before hitting the DB, to prevent enumeration attacks.
+        if (!preg_match('/^0x[a-f0-9]{64}$/i', $tx_hash)) {
+            return new \WP_Error('clearwallet_invalid_tx', 'Invalid tx_hash format', ['status' => 400]);
         }
 
         global $wpdb;
         $tx = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$wpdb->prefix}agentpay_transactions WHERE tx_hash = %s", $tx_hash
+            "SELECT * FROM {$wpdb->prefix}clearwallet_transactions WHERE tx_hash = %s", $tx_hash
         ), ARRAY_A);
 
         if (!$tx) {
-            return new \WP_Error('agentpay_no_tx', 'Transaction not found', ['status' => 404]);
+            return new \WP_Error('clearwallet_no_tx', 'Transaction not found', ['status' => 404]);
         }
         if (in_array($tx['status'], ['refunded', 'refunding'], true)) {
             return rest_ensure_response([
@@ -57,21 +68,39 @@ class Dispute {
             ]);
         }
 
+        // SECURITY: The /dispute endpoint is public (permission_callback is
+        // __return_true) because legitimate AI agents need to file disputes
+        // without WordPress credentials. To prevent abuse — anyone with a
+        // known tx_hash could otherwise submit disputes and trigger refunds
+        // on transactions they didn't make — we REQUIRE positive agent
+        // identification matching the original payer.
+        //
+        // Three checks, all must pass:
+        //   1. Detector identifies the requester as an AI agent
+        //   2. The detected agent_id matches the agent that paid the tx
+        //   3. (Existing) the reason is in the allowed enum
         $detection = Detector::detect($_SERVER);
-        if (!empty($detection['is_agent']) && $detection['agent_id'] !== $tx['agent_id']) {
+        if (empty($detection['is_agent']) || empty($detection['agent_id'])) {
+            // No verifiable agent identity — refuse. Real agents that paid
+            // for this tx will be detectable via the same signature path.
+            return new \WP_Error('clearwallet_unidentified',
+                'Dispute requires a verifiable agent identity (RFC 9421 Signature-Agent or known UA)',
+                ['status' => 403]);
+        }
+        if ($detection['agent_id'] !== $tx['agent_id']) {
             Abuse::record($detection['agent_id'], 'dispute_mismatch', $tx_hash);
-            return new \WP_Error('agentpay_forbidden',
+            return new \WP_Error('clearwallet_forbidden',
                 'Dispute must come from the paying agent identity', ['status' => 403]);
         }
 
         $existing = $wpdb->get_row($wpdb->prepare(
-            "SELECT id FROM {$wpdb->prefix}agentpay_disputes WHERE tx_hash = %s AND status = 'open'", $tx_hash
+            "SELECT id FROM {$wpdb->prefix}clearwallet_disputes WHERE tx_hash = %s AND status = 'open'", $tx_hash
         ));
         if ($existing) {
             return rest_ensure_response(['status' => 'pending', 'id' => $existing->id]);
         }
 
-        $wpdb->insert($wpdb->prefix . 'agentpay_disputes', [
+        $wpdb->insert($wpdb->prefix . 'clearwallet_disputes', [
             'tx_hash'    => $tx_hash,
             'agent_id'   => $tx['agent_id'],
             'reason'     => $reason,
@@ -94,7 +123,7 @@ class Dispute {
             'status'    => 'pending',
             'dispute_id'=> $dispute_id,
             'message'   => 'Dispute filed; operator notified',
-            'check_url' => rest_url("agentpay/v1/dispute?tx_hash={$tx_hash}"),
+            'check_url' => rest_url("clearwallet/v1/dispute?tx_hash={$tx_hash}"),
         ]);
     }
 
@@ -103,13 +132,13 @@ class Dispute {
         global $wpdb;
         $row = $wpdb->get_row($wpdb->prepare(
             "SELECT d.status, d.resolution, d.resolved_at, t.refund_tx
-             FROM {$wpdb->prefix}agentpay_disputes d
-             LEFT JOIN {$wpdb->prefix}agentpay_transactions t ON t.tx_hash = d.tx_hash
+             FROM {$wpdb->prefix}clearwallet_disputes d
+             LEFT JOIN {$wpdb->prefix}clearwallet_transactions t ON t.tx_hash = d.tx_hash
              WHERE d.tx_hash = %s
              ORDER BY d.id DESC LIMIT 1", $tx_hash
         ), ARRAY_A);
         if (!$row) {
-            return new \WP_Error('agentpay_no_dispute', 'No dispute found', ['status' => 404]);
+            return new \WP_Error('clearwallet_no_dispute', 'No dispute found', ['status' => 404]);
         }
         return rest_ensure_response($row);
     }
@@ -123,15 +152,15 @@ class Dispute {
             'rates'    => array_map(function ($r) {
                 return ['atomic' => (int) $r, 'usd' => Facilitator::atomic_to_decimal((int) $r)];
             }, $rates),
-            'dispute_url' => rest_url('agentpay/v1/dispute'),
+            'dispute_url' => rest_url('clearwallet/v1/dispute'),
         ]);
     }
 
     public static function resolve(int $dispute_id, string $resolution, string $by = 'manual') {
         global $wpdb;
-        $tbl = $wpdb->prefix . 'agentpay_disputes';
+        $tbl = $wpdb->prefix . 'clearwallet_disputes';
         $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$tbl} WHERE id = %d", $dispute_id), ARRAY_A);
-        if (!$row) { return new \WP_Error('agentpay_no_dispute', 'Not found'); }
+        if (!$row) { return new \WP_Error('clearwallet_no_dispute', 'Not found'); }
         if ($row['status'] !== 'open') {
             return rest_ensure_response(['status' => $row['status']]);
         }
@@ -162,8 +191,8 @@ class Dispute {
         $to = Installer::setting('dispute_email', get_option('admin_email'));
         if (!$to) { return; }
 
-        $resolve_url = admin_url('admin.php?page=agentpay&tab=disputes&highlight=' . $dispute_id);
-        $subject = sprintf('[AgentPay] Dispute filed for tx %s', substr($tx['tx_hash'], 0, 12));
+        $resolve_url = admin_url('admin.php?page=clearwallet&tab=disputes&highlight=' . $dispute_id);
+        $subject = sprintf('[ClearWallet] Dispute filed for tx %s', substr($tx['tx_hash'], 0, 12));
         $body = sprintf(
             "Agent %s disputed transaction %s\n\nResource: %s\nAmount: %s USDC\nReason: %s\n\nEvidence:\n%s\n\nResolve: %s",
             $tx['agent_id'],

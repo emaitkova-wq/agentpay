@@ -1,5 +1,5 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
 
@@ -19,7 +19,7 @@ class Session {
             'budget' => $budget,
         ];
 
-        set_transient('agentpay_sess_' . $jti, ['budget' => $budget, 'tx' => $tx_hash], $ttl);
+        set_transient('clearwallet_sess_' . $jti, ['budget' => $budget, 'tx' => $tx_hash], $ttl);
 
         return self::encode($claims);
     }
@@ -29,7 +29,7 @@ class Session {
         if (!$claims) { return null; }
         if (($claims['exp'] ?? 0) < time()) { return null; }
 
-        $state = get_transient('agentpay_sess_' . ($claims['jti'] ?? ''));
+        $state = get_transient('clearwallet_sess_' . ($claims['jti'] ?? ''));
         if (!is_array($state)) { return null; }
         if (($state['budget'] ?? 0) <= 0) { return null; }
 
@@ -39,7 +39,7 @@ class Session {
     public static function consume(array $claims) {
         $jti = $claims['jti'] ?? '';
         if (!$jti) { return false; }
-        $key = 'agentpay_sess_' . $jti;
+        $key = 'clearwallet_sess_' . $jti;
         $state = get_transient($key);
         if (!is_array($state)) { return false; }
         $state['budget'] = max(0, ((int) $state['budget']) - 1);
@@ -49,7 +49,7 @@ class Session {
     }
 
     public static function revoke(string $jti) {
-        delete_transient('agentpay_sess_' . $jti);
+        delete_transient('clearwallet_sess_' . $jti);
     }
 
     protected static function encode(array $claims) {
@@ -73,10 +73,10 @@ class Session {
     }
 
     protected static function hmac(string $data) {
-        $secret = get_option('agentpay_session_secret');
+        $secret = get_option('clearwallet_session_secret');
         if (!$secret) {
             Installer::ensure_session_secret();
-            $secret = get_option('agentpay_session_secret');
+            $secret = get_option('clearwallet_session_secret');
         }
         return hash_hmac('sha256', $data, $secret, true);
     }

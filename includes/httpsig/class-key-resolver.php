@@ -1,5 +1,5 @@
 <?php
-namespace AgentPay\HttpSig;
+namespace ClearWallet\HttpSig;
 
 class KeyResolver {
 

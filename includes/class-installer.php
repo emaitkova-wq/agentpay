@@ -1,5 +1,5 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
 
@@ -11,11 +11,11 @@ class Installer {
         self::create_tables();
         self::seed_defaults();
         self::ensure_session_secret();
-        update_option('agentpay_db_version', self::DB_VERSION);
+        update_option('clearwallet_db_version', self::DB_VERSION);
     }
 
     public static function deactivate() {
-        wp_clear_scheduled_hook('agentpay_abuse_gc');
+        wp_clear_scheduled_hook('clearwallet_abuse_gc');
     }
 
     public static function create_tables() {
@@ -23,7 +23,7 @@ class Installer {
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         $charset = $wpdb->get_charset_collate();
 
-        $tx = $wpdb->prefix . 'agentpay_transactions';
+        $tx = $wpdb->prefix . 'clearwallet_transactions';
         dbDelta("CREATE TABLE {$tx} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             tx_hash VARCHAR(128) NOT NULL,
@@ -38,7 +38,6 @@ class Installer {
             status VARCHAR(24) NOT NULL DEFAULT 'paid',
             refund_tx VARCHAR(128) DEFAULT NULL,
             refund_reason VARCHAR(64) DEFAULT NULL,
-            stripe_logged TINYINT(1) NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (id),
@@ -48,7 +47,7 @@ class Installer {
             KEY created_at (created_at)
         ) {$charset};");
 
-        $dp = $wpdb->prefix . 'agentpay_disputes';
+        $dp = $wpdb->prefix . 'clearwallet_disputes';
         dbDelta("CREATE TABLE {$dp} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             tx_hash VARCHAR(128) NOT NULL,
@@ -64,7 +63,7 @@ class Installer {
             KEY status (status)
         ) {$charset};");
 
-        $ab = $wpdb->prefix . 'agentpay_abuse';
+        $ab = $wpdb->prefix . 'clearwallet_abuse';
         dbDelta("CREATE TABLE {$ab} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             agent_id VARCHAR(190) NOT NULL,
@@ -76,7 +75,7 @@ class Installer {
             KEY created_at (created_at)
         ) {$charset};");
 
-        $fs = $wpdb->prefix . 'agentpay_fee_sweeps';
+        $fs = $wpdb->prefix . 'clearwallet_fee_sweeps';
         dbDelta("CREATE TABLE {$fs} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             sweep_tx VARCHAR(128) DEFAULT NULL,
@@ -95,19 +94,13 @@ class Installer {
     }
 
     public static function seed_defaults() {
-        if (get_option(AGENTPAY_OPT)) { return; }
-        update_option(AGENTPAY_OPT, [
+        if (get_option(CLEARWALLET_OPT)) { return; }
+        update_option(CLEARWALLET_OPT, [
             'enabled'                => 0,
             'payto_wallet'           => '',
-            'facilitator_url'        => 'https://api.cdp.coinbase.com/platform/v2/x402',
-            'coinbase_api_key'       => '',
-            'coinbase_api_secret'    => '',
-            'coinbase_wallet_id'     => '',
+            'facilitator_url'        => '', // empty = auto-select by network
             'network'                => 'base',
             'usdc_contract'          => '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-            'stripe_account_id'      => '',
-            'stripe_secret_key'      => '',
-            'stripe_record_revenue'  => 1,
             'rate_card'              => [
                 'page'   => 1000,
                 'view'   => 2000,
@@ -134,13 +127,13 @@ class Installer {
     }
 
     public static function ensure_session_secret() {
-        if (!get_option('agentpay_session_secret')) {
-            update_option('agentpay_session_secret', bin2hex(random_bytes(32)));
+        if (!get_option('clearwallet_session_secret')) {
+            update_option('clearwallet_session_secret', bin2hex(random_bytes(32)));
         }
     }
 
     public static function setting($key, $default = null) {
-        $s = get_option(AGENTPAY_OPT, []);
+        $s = get_option(CLEARWALLET_OPT, []);
         return $s[$key] ?? $default;
     }
 }

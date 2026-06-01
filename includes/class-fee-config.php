@@ -2,7 +2,7 @@
 /**
  * FeeConfig — remote-fetched, cryptographically signed fee wallet
  *
- * The 1% destination wallet for AgentPay fees is no longer hardcoded in the
+ * The 1% destination wallet for ClearWallet fees is no longer hardcoded in the
  * source. Instead the plugin fetches a signed JSON document from cleardeskseo.com
  * and verifies the Ed25519 signature against an embedded ClearDesk public key.
  *
@@ -18,7 +18,7 @@
  *     in the operator's wallet, no money moves until config recovers
  *
  * Endpoint contract:
- *   GET https://cleardeskseo.com/api/agentpay/fee-config
+ *   GET https://cleardeskseo.com/api/clearwallet/fee-config
  *   Response:
  *     {
  *       "data": {
@@ -40,19 +40,19 @@
  *     Even if the remote response says 500 (5%), this class clamps it to 100.
  *     ClearDesk can promote the fee DOWN, never UP.
  *
- * @package AgentPay
+ * @package ClearWallet
  * @since   1.2.0
  */
 
-namespace AgentPay;
+namespace ClearWallet;
 
-if ( ! defined( 'ABSPATH' ) && ! defined( 'AGENTPAY_TESTING' ) ) {
+if ( ! defined( 'ABSPATH' ) && ! defined( 'CLEARWALLET_TESTING' ) ) {
 	exit;
 }
 
 class FeeConfig {
 
-	const ENDPOINT_URL    = 'https://cleardeskseo.com/api/agentpay/fee-config';
+	const ENDPOINT_URL    = 'https://cleardeskseo.com/api/clearwallet/fee-config';
 
 	/**
 	 * ClearDesk SEO's Ed25519 public verification key, base64-encoded.
@@ -65,9 +65,9 @@ class FeeConfig {
 	 */
 	const CLEARDESK_PUBLIC_KEY = 'Mi9FA3O0fm6jHVN5da2hNdBUD1Euvgpri/vescSmJHg=';
 
-	const CACHE_OPT       = 'agentpay_fee_config_cache';
-	const LAST_FETCH_OPT  = 'agentpay_fee_config_last_fetch';
-	const LAST_ERROR_OPT  = 'agentpay_fee_config_last_error';
+	const CACHE_OPT       = 'clearwallet_fee_config_cache';
+	const LAST_FETCH_OPT  = 'clearwallet_fee_config_last_fetch';
+	const LAST_ERROR_OPT  = 'clearwallet_fee_config_last_error';
 
 	const DEFAULT_TTL_SEC = 86400;          // 1 day — used if response omits expires_at
 	const MAX_TTL_SEC     = 31536000;       // 365 days — refuse responses claiming longer
@@ -225,7 +225,7 @@ class FeeConfig {
 			'sslverify' => true,
 			'headers'   => array(
 				'Accept'     => 'application/json',
-				'User-Agent' => 'AgentPay/' . ( defined( 'AGENTPAY_VERSION' ) ? AGENTPAY_VERSION : 'dev' ),
+				'User-Agent' => 'ClearWallet/' . ( defined( 'CLEARWALLET_VERSION' ) ? CLEARWALLET_VERSION : 'dev' ),
 			),
 		) );
 
@@ -303,7 +303,7 @@ class FeeConfig {
 	 * @internal Public for direct test coverage.
 	 */
 	public static function canonicalize( $data ) {
-		if ( class_exists( '\AgentPay\CdpClient' ) ) {
+		if ( class_exists( '\ClearWallet\CdpClient' ) ) {
 			$sorted = CdpClient::sort_keys_deep( $data );
 		} else {
 			$sorted = self::sort_keys_deep_local( $data );
@@ -412,17 +412,21 @@ class FeeConfig {
 
 	private static function record_error( $msg ) {
 		update_option( self::LAST_ERROR_OPT, $msg, false );
-		if ( function_exists( 'error_log' ) ) {
-			error_log( 'AgentPay FeeConfig: ' . $msg );
+		// Only emit to PHP error log when WP_DEBUG is active. Operators in
+		// production can read the most recent error through the Fees admin tab
+		// (it's stored in self::LAST_ERROR_OPT regardless).
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG && function_exists( 'error_log' ) ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- gated on WP_DEBUG
+			error_log( 'ClearWallet FeeConfig: ' . $msg );
 		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Test helpers — only callable when AGENTPAY_TESTING is defined.
+	// Test helpers — only callable when CLEARWALLET_TESTING is defined.
 	// ─────────────────────────────────────────────────────────────────────────
 
 	public static function set_test_override( $wallet, $bps = 100 ) {
-		if ( ! defined( 'AGENTPAY_TESTING' ) ) {
+		if ( ! defined( 'CLEARWALLET_TESTING' ) ) {
 			return;
 		}
 		self::$test_override = array( 'wallet' => $wallet, 'bps' => (int) $bps );
@@ -435,7 +439,7 @@ class FeeConfig {
 	}
 
 	public static function set_endpoint_override( $url ) {
-		if ( ! defined( 'AGENTPAY_TESTING' ) ) {
+		if ( ! defined( 'CLEARWALLET_TESTING' ) ) {
 			return;
 		}
 		self::$endpoint_override = $url;
@@ -443,7 +447,7 @@ class FeeConfig {
 	}
 
 	public static function set_public_key_for_test( $public_key_b64 ) {
-		if ( ! defined( 'AGENTPAY_TESTING' ) ) {
+		if ( ! defined( 'CLEARWALLET_TESTING' ) ) {
 			return;
 		}
 		self::$test_public_key_override = $public_key_b64;

@@ -1,5 +1,5 @@
 <?php
-namespace AgentPay\HttpSig;
+namespace ClearWallet\HttpSig;
 
 class SignatureBase {
 
@@ -16,13 +16,13 @@ class SignatureBase {
         foreach ($components as $c) {
             $key = $c['name'] . '|' . self::paramsHash($c['params']);
             if (isset($seen[$key])) {
-                throw new \RuntimeException("Duplicate component: {$c['name']}");
+                throw new \RuntimeException(esc_html("Duplicate component: {$c['name']}"));
             }
             $seen[$key] = true;
 
             $line = $this->renderComponent($c);
             if ($line === null) {
-                throw new \RuntimeException("Cannot resolve component: {$c['name']}");
+                throw new \RuntimeException(esc_html("Cannot resolve component: {$c['name']}"));
             }
             $lines[] = $line;
         }

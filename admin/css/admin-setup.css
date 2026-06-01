@@ -1,44 +1,44 @@
-.agentpay-setup { max-width: 720px; margin-top: 16px; }
-.agentpay-setup .ap-setup-header h2 { font-size: 22px; margin: 0 0 8px; }
-.agentpay-setup .ap-setup-lede { font-size: 14px; color: #50575e; line-height: 1.6; margin: 0 0 18px; max-width: 600px; }
-.agentpay-setup .ap-setup-tabs { display: flex; gap: 0; border-bottom: 1px solid #dcdcde; margin: 18px 0 24px; }
-.agentpay-setup .ap-setup-tabs a { padding: 10px 16px; text-decoration: none; color: #50575e; border-bottom: 2px solid transparent; font-size: 14px; font-weight: 500; }
-.agentpay-setup .ap-setup-tabs a:hover { color: #4a2872; }
-.agentpay-setup .ap-setup-tabs a.is-active { color: #4a2872; border-bottom-color: #4a2872; }
-.agentpay-setup .ap-setup-section-lede { font-size: 14px; color: #50575e; line-height: 1.6; margin: 0 0 20px; }
-.agentpay-setup .ap-field { margin-bottom: 16px; }
-.agentpay-setup .ap-field label { display: flex; align-items: baseline; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: #1d2327; }
-.agentpay-setup .ap-help-trigger { font-size: 12px; font-weight: 400; color: #2271b1; text-decoration: none; cursor: pointer; }
-.agentpay-setup .ap-help-trigger:hover { text-decoration: underline; }
-.agentpay-setup .ap-help-loud { color: #a32d2d; font-weight: 600; }
-.agentpay-setup .ap-help-loud::before { content: "⚠ "; }
-.agentpay-setup .ap-field input[type="text"],
-.agentpay-setup .ap-field input[type="password"],
-.agentpay-setup .ap-field textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
-.agentpay-setup .ap-field textarea { min-height: 90px; resize: vertical; }
-.agentpay-setup .ap-field-hint { font-size: 12px; color: #646970; margin: 4px 0 0; font-style: italic; }
-.agentpay-setup .ap-actions { display: flex; align-items: center; gap: 8px; margin: 20px 0 10px; flex-wrap: wrap; }
-.agentpay-setup .ap-spinner { float: none; visibility: hidden; }
-.agentpay-setup .ap-spinner.is-active { visibility: visible; }
-.agentpay-setup .ap-status { margin: 12px 0 0; padding: 0; font-size: 13px; }
-.agentpay-setup .ap-status.is-success { color: #007a3d; padding: 10px 14px; background: #e8f4ec; border-left: 3px solid #007a3d; }
-.agentpay-setup .ap-status.is-error { color: #a32d2d; padding: 10px 14px; background: #fcebeb; border-left: 3px solid #a32d2d; }
-.agentpay-setup .ap-footer-cta { margin-top: 32px; padding: 14px 16px; background: #f6f7f7; border-radius: 4px; font-size: 13px; color: #50575e; }
-.agentpay-setup .ap-footer-cta strong { color: #1d2327; }
-.agentpay-setup .ap-footer-cta a { color: #4a2872; font-weight: 600; }
-.agentpay-setup .ap-success-panel { background: #fff; border: 1px solid #dcdcde; border-radius: 4px; padding: 22px 24px; margin: 0 0 20px; }
-.agentpay-setup .ap-check-line { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; margin-bottom: 10px; color: #1d2327; }
-.agentpay-setup .ap-check-line .dashicons { color: #007a3d; }
-.agentpay-setup .ap-address-box { margin-top: 18px; padding: 16px 18px; background: #f6f7f7; border-radius: 4px; }
-.agentpay-setup .ap-address-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #646970; margin-bottom: 6px; }
-.agentpay-setup .ap-address-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
-.agentpay-setup .ap-address-row code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; color: #1d2327; }
-.agentpay-setup .ap-address-meta { font-size: 12px; color: #646970; margin-top: 8px; }
-.agentpay-setup .ap-danger-link { color: #a32d2d; margin-left: auto; }
-.agentpay-setup .ap-danger-link:hover { color: #791f1f; }
-.agentpay-setup .ap-advanced { margin-top: 32px; font-size: 13px; }
-.agentpay-setup .ap-advanced summary { cursor: pointer; color: #50575e; font-weight: 500; }
-.agentpay-setup .ap-advanced p { color: #646970; margin-top: 10px; max-width: 600px; line-height: 1.6; }
+.clearwallet-setup { max-width: 720px; margin-top: 16px; }
+.clearwallet-setup .ap-setup-header h2 { font-size: 22px; margin: 0 0 8px; }
+.clearwallet-setup .ap-setup-lede { font-size: 14px; color: #50575e; line-height: 1.6; margin: 0 0 18px; max-width: 600px; }
+.clearwallet-setup .ap-setup-tabs { display: flex; gap: 0; border-bottom: 1px solid #dcdcde; margin: 18px 0 24px; }
+.clearwallet-setup .ap-setup-tabs a { padding: 10px 16px; text-decoration: none; color: #50575e; border-bottom: 2px solid transparent; font-size: 14px; font-weight: 500; }
+.clearwallet-setup .ap-setup-tabs a:hover { color: #4a2872; }
+.clearwallet-setup .ap-setup-tabs a.is-active { color: #4a2872; border-bottom-color: #4a2872; }
+.clearwallet-setup .ap-setup-section-lede { font-size: 14px; color: #50575e; line-height: 1.6; margin: 0 0 20px; }
+.clearwallet-setup .ap-field { margin-bottom: 16px; }
+.clearwallet-setup .ap-field label { display: flex; align-items: baseline; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: #1d2327; }
+.clearwallet-setup .ap-help-trigger { font-size: 12px; font-weight: 400; color: #2271b1; text-decoration: none; cursor: pointer; }
+.clearwallet-setup .ap-help-trigger:hover { text-decoration: underline; }
+.clearwallet-setup .ap-help-loud { color: #a32d2d; font-weight: 600; }
+.clearwallet-setup .ap-help-loud::before { content: "⚠ "; }
+.clearwallet-setup .ap-field input[type="text"],
+.clearwallet-setup .ap-field input[type="password"],
+.clearwallet-setup .ap-field textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+.clearwallet-setup .ap-field textarea { min-height: 90px; resize: vertical; }
+.clearwallet-setup .ap-field-hint { font-size: 12px; color: #646970; margin: 4px 0 0; font-style: italic; }
+.clearwallet-setup .ap-actions { display: flex; align-items: center; gap: 8px; margin: 20px 0 10px; flex-wrap: wrap; }
+.clearwallet-setup .ap-spinner { float: none; visibility: hidden; }
+.clearwallet-setup .ap-spinner.is-active { visibility: visible; }
+.clearwallet-setup .ap-status { margin: 12px 0 0; padding: 0; font-size: 13px; }
+.clearwallet-setup .ap-status.is-success { color: #007a3d; padding: 10px 14px; background: #e8f4ec; border-left: 3px solid #007a3d; }
+.clearwallet-setup .ap-status.is-error { color: #a32d2d; padding: 10px 14px; background: #fcebeb; border-left: 3px solid #a32d2d; }
+.clearwallet-setup .ap-footer-cta { margin-top: 32px; padding: 14px 16px; background: #f6f7f7; border-radius: 4px; font-size: 13px; color: #50575e; }
+.clearwallet-setup .ap-footer-cta strong { color: #1d2327; }
+.clearwallet-setup .ap-footer-cta a { color: #4a2872; font-weight: 600; }
+.clearwallet-setup .ap-success-panel { background: #fff; border: 1px solid #dcdcde; border-radius: 4px; padding: 22px 24px; margin: 0 0 20px; }
+.clearwallet-setup .ap-check-line { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; margin-bottom: 10px; color: #1d2327; }
+.clearwallet-setup .ap-check-line .dashicons { color: #007a3d; }
+.clearwallet-setup .ap-address-box { margin-top: 18px; padding: 16px 18px; background: #f6f7f7; border-radius: 4px; }
+.clearwallet-setup .ap-address-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #646970; margin-bottom: 6px; }
+.clearwallet-setup .ap-address-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.clearwallet-setup .ap-address-row code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; color: #1d2327; }
+.clearwallet-setup .ap-address-meta { font-size: 12px; color: #646970; margin-top: 8px; }
+.clearwallet-setup .ap-danger-link { color: #a32d2d; margin-left: auto; }
+.clearwallet-setup .ap-danger-link:hover { color: #791f1f; }
+.clearwallet-setup .ap-advanced { margin-top: 32px; font-size: 13px; }
+.clearwallet-setup .ap-advanced summary { cursor: pointer; color: #50575e; font-weight: 500; }
+.clearwallet-setup .ap-advanced p { color: #646970; margin-top: 10px; max-width: 600px; line-height: 1.6; }
 /* Modals */
 .ap-modal-backdrop { position: fixed; inset: 0; background: rgba(26,24,20,0.45); z-index: 99998; }
 .ap-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #fff; border-radius: 6px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); max-width: 540px; width: calc(100% - 40px); max-height: calc(100vh - 80px); overflow-y: auto; z-index: 99999; }

@@ -1,7 +1,12 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
 if (!defined('ABSPATH')) { exit; }
+
+// phpcs:disable WordPress.DB.DirectDatabaseQuery -- transactional plugin; wp_cache would yield stale reads of in-flight transactions/disputes/fee sweeps. Hot paths already use $wpdb->prepare() for all user data.
+// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- {$tbl}/{$prefix} interpolation is the plugin's own table name ($wpdb->prefix . 'clearwallet_*'), not user input. WP 6.0 baseline can't use the %i identifier placeholder added in 6.2.
+// phpcs:disable PluginCheck.Security.DirectDB.UnescapedDBParameter -- same rationale as InterpolatedNotPrepared above.
+
 
 class Abuse {
 
@@ -38,19 +43,19 @@ class Abuse {
         foreach ($entries as $e) {
             if ($e === $fp || $e === $agent_id) { return true; }
         }
-        return (bool) get_transient('agentpay_block_' . md5($fp));
+        return (bool) get_transient('clearwallet_block_' . md5($fp));
     }
 
     public static function auto_block(string $fp) {
         $window = (int) Installer::setting('abuse_block_window', 600);
-        set_transient('agentpay_block_' . md5($fp), 1, $window);
+        set_transient('clearwallet_block_' . md5($fp), 1, $window);
     }
 
     public static function over_rate_limit(string $fp) {
         $limit = (int) Installer::setting('abuse_rate_per_min', 120);
         if ($limit <= 0) { return false; }
 
-        $key = 'agentpay_rl_' . md5($fp);
+        $key = 'clearwallet_rl_' . md5($fp);
         $count = (int) get_transient($key);
         $count++;
         set_transient($key, $count, 60);
@@ -59,7 +64,7 @@ class Abuse {
 
     public static function record(string $agent_id, string $event, string $details = '') {
         global $wpdb;
-        $wpdb->insert($wpdb->prefix . 'agentpay_abuse', [
+        $wpdb->insert($wpdb->prefix . 'clearwallet_abuse', [
             'agent_id'   => $agent_id,
             'event'      => $event,
             'details'    => $details,
@@ -72,7 +77,7 @@ class Abuse {
         $threshold = (int) Installer::setting('abuse_block_threshold', 20);
         $window    = (int) Installer::setting('abuse_block_window', 600);
         $since     = gmdate('Y-m-d H:i:s', time() - $window);
-        $tbl       = $wpdb->prefix . 'agentpay_abuse';
+        $tbl       = $wpdb->prefix . 'clearwallet_abuse';
         $count     = (int) $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM {$tbl} WHERE agent_id = %s AND created_at > %s",
             $agent_id, $since
@@ -82,7 +87,7 @@ class Abuse {
 
     public static function recent_failure_rate(string $agent_id) {
         global $wpdb;
-        $tbl   = $wpdb->prefix . 'agentpay_abuse';
+        $tbl   = $wpdb->prefix . 'clearwallet_abuse';
         $since = gmdate('Y-m-d H:i:s', time() - 3600);
         $total = (int) $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM {$tbl} WHERE agent_id = %s AND created_at > %s",

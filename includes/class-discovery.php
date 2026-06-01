@@ -2,10 +2,10 @@
 /**
  * Discovery — Agent endpoint advertisement
  *
- * Publishes AgentPay's REST endpoints in two machine-readable locations so
+ * Publishes ClearWallet's REST endpoints in two machine-readable locations so
  * AI agents can discover the paywall without prior knowledge of the plugin:
  *
- *   GET /.well-known/agentpay   → JSON discovery document (RFC 8615)
+ *   GET /.well-known/clearwallet   → JSON discovery document (RFC 8615)
  *   GET /robots.txt             → comments pointing at the discovery doc
  *
  * .well-known is the standardized location for site metadata. robots.txt
@@ -14,23 +14,23 @@
  * a fallback path if they don't probe .well-known first.
  *
  * Operators can:
- *   - Disable entirely: add_filter('agentpay_discovery_enabled', '__return_false')
- *   - Customize the JSON payload: add_filter('agentpay_discovery_payload', $cb)
- *   - Customize the robots.txt lines: add_filter('agentpay_robots_txt_lines', $cb)
+ *   - Disable entirely: add_filter('clearwallet_discovery_enabled', '__return_false')
+ *   - Customize the JSON payload: add_filter('clearwallet_discovery_payload', $cb)
+ *   - Customize the robots.txt lines: add_filter('clearwallet_robots_txt_lines', $cb)
  *
- * @package AgentPay
+ * @package ClearWallet
  * @since   1.3.0
  */
 
-namespace AgentPay;
+namespace ClearWallet;
 
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class Discovery {
 
-	const QUERY_VAR = 'agentpay_well_known';
+	const QUERY_VAR = 'clearwallet_well_known';
 	const VERSION   = 1;
-	const REST_NS   = 'agentpay/v1';
+	const REST_NS   = 'clearwallet/v1';
 
 	public static function init() {
 		add_action( 'init',              array( __CLASS__, 'register_rewrite' ) );
@@ -40,12 +40,12 @@ class Discovery {
 	}
 
 	/**
-	 * Register the rewrite rule that maps /.well-known/agentpay to our handler.
+	 * Register the rewrite rule that maps /.well-known/clearwallet to our handler.
 	 * Must run on `init` so WordPress sees it during route resolution.
 	 */
 	public static function register_rewrite() {
 		add_rewrite_rule(
-			'^\.well-known/agentpay/?$',
+			'^\.well-known/clearwallet/?$',
 			'index.php?' . self::QUERY_VAR . '=1',
 			'top'
 		);
@@ -65,7 +65,7 @@ class Discovery {
 			return;
 		}
 
-		if ( ! apply_filters( 'agentpay_discovery_enabled', true ) ) {
+		if ( ! apply_filters( 'clearwallet_discovery_enabled', true ) ) {
 			status_header( 404 );
 			exit;
 		}
@@ -87,7 +87,7 @@ class Discovery {
 
 	/**
 	 * Build the discovery JSON payload. The shape is versioned (top-level
-	 * `agentpay` integer) so future plugin releases can add fields without
+	 * `clearwallet` integer) so future plugin releases can add fields without
 	 * breaking agents that parsed an earlier version.
 	 *
 	 * @return array
@@ -99,8 +99,8 @@ class Discovery {
 		$usdc    = self::get_setting( 'usdc_contract', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' );
 
 		$payload = array(
-			'agentpay'      => self::VERSION,
-			'name'          => 'AgentPay',
+			'clearwallet'      => self::VERSION,
+			'name'          => 'ClearWallet',
 			'protocol'      => 'x402',
 			'detection'     => 'RFC 9421 Web Bot Auth (HTTP Message Signatures)',
 			'currency'      => 'USDC',
@@ -129,7 +129,7 @@ class Discovery {
 			'documentation' => 'https://cleardeskseo.com/wp-plugins',
 		);
 
-		return apply_filters( 'agentpay_discovery_payload', $payload );
+		return apply_filters( 'clearwallet_discovery_payload', $payload );
 	}
 
 	/**
@@ -142,17 +142,17 @@ class Discovery {
 			// Site is in "discourage search engines" mode — respect that.
 			return $output;
 		}
-		if ( ! apply_filters( 'agentpay_discovery_enabled', true ) ) {
+		if ( ! apply_filters( 'clearwallet_discovery_enabled', true ) ) {
 			return $output;
 		}
 
-		$well_known    = self::canonicalize_url( home_url( '/.well-known/agentpay' ) );
+		$well_known    = self::canonicalize_url( home_url( '/.well-known/clearwallet' ) );
 		$rate_card_url = self::canonicalize_url( rest_url( self::REST_NS . '/rate-card' ) );
 		$dispute_url   = self::canonicalize_url( rest_url( self::REST_NS . '/dispute' ) );
 
 		$lines = array(
 			'',
-			'# AgentPay — AI agent payment endpoints (x402 protocol over RFC 9421)',
+			'# ClearWallet — AI agent payment endpoints (x402 protocol over RFC 9421)',
 			'# Machine-readable discovery doc: ' . $well_known,
 			'# Rate card:      GET  ' . $rate_card_url,
 			'# Submit dispute: POST ' . $dispute_url,
@@ -160,7 +160,7 @@ class Discovery {
 			'',
 		);
 
-		$lines = apply_filters( 'agentpay_robots_txt_lines', $lines );
+		$lines = apply_filters( 'clearwallet_robots_txt_lines', $lines );
 
 		return rtrim( $output ) . "\n" . implode( "\n", $lines ) . "\n";
 	}
@@ -186,7 +186,7 @@ class Discovery {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	private static function get_setting( $key, $default = null ) {
-		if ( ! class_exists( '\AgentPay\Installer' ) ) {
+		if ( ! class_exists( '\ClearWallet\Installer' ) ) {
 			return $default;
 		}
 		return Installer::setting( $key, $default );

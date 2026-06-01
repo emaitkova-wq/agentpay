@@ -1,8 +1,8 @@
 <?php
-namespace AgentPay;
+namespace ClearWallet;
 
-use AgentPay\HttpSig\Verifier;
-use AgentPay\HttpSig\KeyResolver;
+use ClearWallet\HttpSig\Verifier;
+use ClearWallet\HttpSig\KeyResolver;
 
 if (!defined('ABSPATH')) { exit; }
 
@@ -97,8 +97,8 @@ class Detector {
     protected static function message_from_server(array $server, array $headers) {
         $scheme = (!empty($server['HTTPS']) && $server['HTTPS'] !== 'off') ? 'https' : 'http';
         $uri = $server['REQUEST_URI'] ?? '/';
-        $path = parse_url($uri, PHP_URL_PATH) ?: '/';
-        $query = parse_url($uri, PHP_URL_QUERY);
+        $path = wp_parse_url($uri, PHP_URL_PATH) ?: '/';
+        $query = wp_parse_url($uri, PHP_URL_QUERY);
         return [
             'method'    => $server['REQUEST_METHOD'] ?? 'GET',
             'scheme'    => $scheme,
@@ -114,16 +114,16 @@ class Detector {
             return self::lookup_key($keyid);
         });
         $verifier = new Verifier($resolver);
-        $verifier->clockSkew = (int) apply_filters('agentpay_sig_clock_skew', 30);
-        $verifier->maxAge    = (int) apply_filters('agentpay_sig_max_age', 600);
-        if (apply_filters('agentpay_require_web_bot_auth_tag', false)) {
+        $verifier->clockSkew = (int) apply_filters('clearwallet_sig_clock_skew', 30);
+        $verifier->maxAge    = (int) apply_filters('clearwallet_sig_max_age', 600);
+        if (apply_filters('clearwallet_require_web_bot_auth_tag', false)) {
             $verifier->requiredTag = 'web-bot-auth';
         }
         return $verifier;
     }
 
     protected static function lookup_key($keyid) {
-        $cache_key = 'agentpay_jwk_' . md5($keyid);
+        $cache_key = 'clearwallet_jwk_' . md5($keyid);
         $cached = get_transient($cache_key);
         if (is_array($cached) && !empty($cached)) { return $cached; }
 
@@ -148,7 +148,7 @@ class Detector {
     }
 
     public static function directories() {
-        return apply_filters('agentpay_known_directories', [
+        return apply_filters('clearwallet_known_directories', [
             'https://anthropic.com/.well-known/http-message-signatures-directory'  => 'anthropic',
             'https://openai.com/.well-known/http-message-signatures-directory'     => 'openai',
             'https://perplexity.ai/.well-known/http-message-signatures-directory'  => 'perplexity',
@@ -158,8 +158,8 @@ class Detector {
     protected static function record_sig_failure($result) {
         $err = $result['error'] ?? 'unknown';
         $detail = $result['detail'] ?? '';
-        if (class_exists('\AgentPay\Abuse')) {
-            $fp = 'sig_fail:' . md5(($_SERVER['REMOTE_ADDR'] ?? '') . ':' . $err);
+        if (class_exists('\ClearWallet\Abuse')) {
+            $fp = 'sig_fail:' . md5( ( isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '' ) . ':' . $err );
             Abuse::record($fp, 'bad_signature', $err . ($detail ? ':' . substr($detail, 0, 100) : ''));
         }
     }

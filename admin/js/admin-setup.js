@@ -38,33 +38,33 @@
 		// ─── AJAX: test connection ────────────────────────────────────────
 		$body.on('click', '#ap-btn-test', function () {
 			run({
-				action:   'agentpay_test_connection',
+				action:   'clearwallet_test_connection',
 				form:     '#ap-create-form',
 				status:   '#ap-create-status',
 				spinner:  $(this).siblings('.ap-spinner'),
-				busyText: AgentPaySetup.strings.testing
+				busyText: ClearWalletSetup.strings.testing
 			});
 		});
 
 		// ─── AJAX: create wallet ──────────────────────────────────────────
 		$body.on('click', '#ap-btn-create', function () {
 			run({
-				action:   'agentpay_create_wallet',
+				action:   'clearwallet_create_wallet',
 				form:     '#ap-create-form',
 				status:   '#ap-create-status',
 				spinner:  $(this).siblings('.ap-spinner'),
-				busyText: AgentPaySetup.strings.creating
+				busyText: ClearWalletSetup.strings.creating
 			});
 		});
 
 		// ─── AJAX: attach existing wallet ─────────────────────────────────
 		$body.on('click', '#ap-btn-use-existing', function () {
 			run({
-				action:   'agentpay_use_existing',
+				action:   'clearwallet_use_existing',
 				form:     '#ap-existing-form',
 				status:   '#ap-existing-status',
 				spinner:  $(this).siblings('.ap-spinner'),
-				busyText: AgentPaySetup.strings.attaching
+				busyText: ClearWalletSetup.strings.attaching
 			});
 		});
 
@@ -74,17 +74,17 @@
 			var $btn = $(this);
 			navigator.clipboard.writeText(addr).then(function () {
 				var orig = $btn.html();
-				$btn.html('<span class="dashicons dashicons-yes"></span> ' + AgentPaySetup.strings.copied);
+				$btn.html('<span class="dashicons dashicons-yes"></span> ' + ClearWalletSetup.strings.copied);
 				setTimeout(function () { $btn.html(orig); }, 1800);
 			});
 		});
 
 		// ─── Disconnect ───────────────────────────────────────────────────
 		$body.on('click', '#ap-btn-disconnect', function () {
-			if (!window.confirm(AgentPaySetup.strings.confirm_disconnect)) return;
-			$.post(AgentPaySetup.ajaxUrl, {
-				action: 'agentpay_disconnect',
-				nonce:  AgentPaySetup.nonce
+			if (!window.confirm(ClearWalletSetup.strings.confirm_disconnect)) return;
+			$.post(ClearWalletSetup.ajaxUrl, {
+				action: 'clearwallet_disconnect',
+				nonce:  ClearWalletSetup.nonce
 			}, function () { window.location.reload(); });
 		});
 
@@ -101,9 +101,9 @@
 
 			var data = $form.serializeArray().reduce(function (acc, f) { acc[f.name] = f.value; return acc; }, {});
 			data.action = opts.action;
-			data.nonce  = AgentPaySetup.nonce;
+			data.nonce  = ClearWalletSetup.nonce;
 
-			$.post(AgentPaySetup.ajaxUrl, data)
+			$.post(ClearWalletSetup.ajaxUrl, data)
 				.done(function (res) {
 					if (res && res.success) {
 						$status.addClass('is-success').text(res.data.message || 'Done.');
