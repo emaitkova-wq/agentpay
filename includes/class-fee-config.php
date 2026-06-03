@@ -46,8 +46,12 @@
 
 namespace ClearWallet;
 
-if ( ! defined( 'ABSPATH' ) && ! defined( 'CLEARWALLET_TESTING' ) ) {
-	exit;
+if ( ! defined( 'ABSPATH' ) ) {
+	// Allow the standalone test harness (which defines CLEARWALLET_TESTING) to
+	// load this class without a full WordPress bootstrap.
+	if ( ! defined( 'CLEARWALLET_TESTING' ) ) {
+		exit; // Exit if accessed directly.
+	}
 }
 
 class FeeConfig {

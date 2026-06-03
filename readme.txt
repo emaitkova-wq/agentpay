@@ -4,11 +4,11 @@ Tags: ai, agents, x402, usdc, paywall
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.4.16
+Stable tag: 1.4.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Open source AI agent payment processor. Charge AI agents in USDC for access to your content. RFC 9421 Web Bot Auth, x402 protocol, gasless Coinbase USDC settlement.
+Open-source paywall that charges AI agents in USDC for your content. x402 protocol, RFC 9421 Web Bot Auth, gasless Coinbase settlement.
 
 == Description ==
 
@@ -133,6 +133,9 @@ Per-provider terms and privacy policies (the operator using this plugin is respo
 The full current list and any new providers added in future versions are visible in `includes/class-detector.php` under `KNOWN_AGENTS`.
 
 == Changelog ==
+
+= 1.4.17 =
+* Plugin Check compliance: rewrote the direct-access guard in class-cdp-client.php and class-fee-config.php to the canonical "if ( ! defined( 'ABSPATH' ) )" form (the previous compound guard protected the files but wasn't recognized by the checker); replaced a direct array_is_list() call with an equivalent manual check so the plugin stays compatible with WordPress 6.0; and shortened the readme short description to 150 characters. No functional change.
 
 = 1.4.16 =
 * Fixed a cash-out rounding bug. The available balance was rounded to two decimals for display, which could round UP (e.g. 0.099 shown as "0.10") and then exceed the real withdrawable amount, so the Max/displayed value was rejected. Amounts now display their exact value (up to USDC's six decimals), and the reserved 1% fee is shown next to the available balance so the deduction is visible.

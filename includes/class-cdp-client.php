@@ -38,8 +38,12 @@
 
 namespace ClearWallet;
 
-if ( ! defined( 'ABSPATH' ) && ! defined( 'CLEARWALLET_TESTING' ) ) {
-	exit;
+if ( ! defined( 'ABSPATH' ) ) {
+	// Allow the standalone test harness (which defines CLEARWALLET_TESTING) to
+	// load this class without a full WordPress bootstrap.
+	if ( ! defined( 'CLEARWALLET_TESTING' ) ) {
+		exit; // Exit if accessed directly.
+	}
 }
 
 class CdpClient {
@@ -631,10 +635,9 @@ class CdpClient {
 		if ( empty( $a ) ) {
 			return true;
 		}
-		// PHP 8.1+ has array_is_list; manual check for 7.4+.
-		if ( function_exists( 'array_is_list' ) ) {
-			return array_is_list( $a );
-		}
+		// Manual list check (keys must be 0,1,2,…,n-1 in order). Kept hand-rolled
+		// so the plugin stays compatible with WordPress 6.0 — the equivalent core
+		// polyfill only ships in WordPress 6.5+.
 		$i = 0;
 		foreach ( $a as $k => $_ ) {
 			if ( $k !== $i++ ) {
