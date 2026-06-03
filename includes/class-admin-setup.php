@@ -44,6 +44,8 @@ class AdminSetup {
 		add_action( 'wp_ajax_clearwallet_create_wallet',   array( $this, 'ajax_create_wallet' ) );
 		add_action( 'wp_ajax_clearwallet_use_existing',    array( $this, 'ajax_use_existing' ) );
 		add_action( 'wp_ajax_clearwallet_disconnect',      array( $this, 'ajax_disconnect' ) );
+		add_action( 'wp_ajax_clearwallet_balance',         array( $this, 'ajax_balance' ) );
+		add_action( 'wp_ajax_clearwallet_withdraw',        array( $this, 'ajax_withdraw' ) );
 		add_action( 'admin_enqueue_scripts',            array( $this, 'enqueue_assets' ) );
 	}
 
@@ -61,6 +63,61 @@ class AdminSetup {
 		}
 		self::render_modals();
 		echo '</div>';
+	}
+
+	/**
+	 * "Cash out your balance" panel. Lives on the Transactions tab. Uses the
+	 * admin-setup CSS/JS (enqueued on every ClearWallet admin screen), so it is
+	 * wrapped in .clearwallet-setup for styling. Renders nothing until a
+	 * receiving wallet is connected.
+	 */
+	public static function render_cashout_panel() {
+		$address = get_option( 'clearwallet_receiving_address', '' );
+		if ( empty( $address ) ) {
+			return;
+		}
+		?>
+		<div class="clearwallet-setup">
+			<div class="ap-cashout">
+				<h3><?php esc_html_e( 'Cash out your balance', 'agentpay-by-cleardesk-seo' ); ?></h3>
+				<p class="ap-cashout-lede">
+					<?php esc_html_e( 'Your earnings are held as USDC in your wallet. Two ways to turn them into dollars:', 'agentpay-by-cleardesk-seo' ); ?>
+				</p>
+				<ul class="ap-cashout-options">
+					<li><?php esc_html_e( 'Pay out to your bank directly — requires a Coinbase Business (Portal) account with payouts enabled.', 'agentpay-by-cleardesk-seo' ); ?></li>
+					<li><?php esc_html_e( 'Or send your USDC to your personal Coinbase account below, then sell it for USD and withdraw to your bank. No Business account needed, and gas is free.', 'agentpay-by-cleardesk-seo' ); ?></li>
+				</ul>
+
+				<div class="ap-cashout-balance">
+					<?php esc_html_e( 'Available:', 'agentpay-by-cleardesk-seo' ); ?>
+					<strong id="ap-balance">…</strong> <?php esc_html_e( 'USDC', 'agentpay-by-cleardesk-seo' ); ?>
+					<span id="ap-cashout-fee" class="ap-cashout-fee"></span>
+				</div>
+
+				<div class="ap-field">
+					<label for="ap-withdraw-to"><?php esc_html_e( 'Your Coinbase USDC deposit address (Base network)', 'agentpay-by-cleardesk-seo' ); ?></label>
+					<input type="text" id="ap-withdraw-to" class="regular-text code" placeholder="0x…" autocomplete="off" spellcheck="false" />
+				</div>
+				<div class="ap-field">
+					<label for="ap-withdraw-amount"><?php esc_html_e( 'Amount (USDC)', 'agentpay-by-cleardesk-seo' ); ?></label>
+					<input type="text" id="ap-withdraw-amount" class="regular-text code" placeholder="0.00" autocomplete="off" inputmode="decimal" />
+					<button type="button" class="button-link" id="ap-withdraw-max"><?php esc_html_e( 'Max', 'agentpay-by-cleardesk-seo' ); ?></button>
+				</div>
+
+				<div class="ap-withdraw-actions">
+					<button type="button" class="button button-primary" id="ap-btn-withdraw">
+						<?php esc_html_e( 'Send to Coinbase', 'agentpay-by-cleardesk-seo' ); ?>
+					</button>
+					<span class="ap-spinner"></span>
+				</div>
+				<div id="ap-withdraw-status" class="ap-status" role="status" aria-live="polite"></div>
+
+				<p class="ap-cashout-fineprint">
+					<?php esc_html_e( 'On Coinbase, choose USDC and select the Base network when copying your deposit address. Selling USDC for USD can be a taxable event — keep your records.', 'agentpay-by-cleardesk-seo' ); ?>
+				</p>
+			</div>
+		</div>
+		<?php
 	}
 
 	private static function render_empty_state() {
@@ -477,6 +534,98 @@ class AdminSetup {
 		wp_send_json_success( array( 'reload' => true ) );
 	}
 
+	/**
+	 * Report the connected wallet's USDC balance (read from the Base RPC) so the
+	 * cash-out panel can show "Available: X USDC" and offer a one-click Max.
+	 */
+	public function ajax_balance() {
+		$this->check_ajax();
+		$address = get_option( 'clearwallet_receiving_address', '' );
+		if ( empty( $address ) ) {
+			wp_send_json_error( array( 'message' => __( 'No wallet connected.', 'agentpay-by-cleardesk-seo' ) ), 400 );
+		}
+		$network = Installer::setting( 'network', 'base' );
+		$atomic  = CdpClient::usdc_balance( $address, $network );
+		if ( is_wp_error( $atomic ) ) {
+			wp_send_json_error( array( 'message' => $atomic->get_error_message() ), 400 );
+		}
+		// Reserve the unswept 1% fee so the merchant can't withdraw funds the fee
+		// sweep still needs — withdrawing into that reserve is what put the sweep
+		// and the wallet balance out of sync (and caused "insufficient_funds").
+		$reserved  = FeeProcessor::pending_atomic();
+		$available = max( 0, (int) $atomic - $reserved );
+		wp_send_json_success( array(
+			'atomic'          => (string) $available,
+			'usdc'            => self::fmt_usdc( $available ),
+			'gross'           => self::fmt_usdc( (int) $atomic ),
+			'reserved'        => self::fmt_usdc( $reserved ),
+			'reserved_atomic' => (string) $reserved,
+		) );
+	}
+
+	/**
+	 * Send USDC from the connected wallet to a destination address (the
+	 * merchant's personal Coinbase deposit address). Reuses the same gasless
+	 * EIP-3009 transfer the fee sweep uses, so Coinbase covers the gas.
+	 */
+	public function ajax_withdraw() {
+		$this->check_ajax();
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via $this->check_ajax()
+		$to = isset( $_POST['to'] ) ? sanitize_text_field( wp_unslash( $_POST['to'] ) ) : '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via $this->check_ajax()
+		$amount = isset( $_POST['amount'] ) ? sanitize_text_field( wp_unslash( $_POST['amount'] ) ) : '';
+
+		if ( ! preg_match( '/^0x[0-9a-fA-F]{40}$/', $to ) ) {
+			wp_send_json_error( array( 'message' => __( 'Enter a valid 0x destination address (your Coinbase USDC deposit address on Base).', 'agentpay-by-cleardesk-seo' ) ), 400 );
+		}
+		$amount_f = (float) $amount;
+		if ( $amount_f <= 0 ) {
+			wp_send_json_error( array( 'message' => __( 'Enter an amount of USDC to send.', 'agentpay-by-cleardesk-seo' ) ), 400 );
+		}
+		$atomic = (int) round( $amount_f * 1000000 );
+		if ( $atomic < 10000 ) {
+			wp_send_json_error( array( 'message' => __( 'The minimum send is 0.01 USDC.', 'agentpay-by-cleardesk-seo' ) ), 400 );
+		}
+
+		// Enforce the reserve at submit time: never withdraw the portion owed to
+		// the fee sweep, nor more than the wallet actually holds on-chain.
+		$address = get_option( 'clearwallet_receiving_address', '' );
+		$network = Installer::setting( 'network', 'base' );
+		$balance = CdpClient::usdc_balance( $address, $network );
+		if ( ! is_wp_error( $balance ) ) {
+			$available = max( 0, (int) $balance - FeeProcessor::pending_atomic() );
+			if ( $atomic > $available ) {
+				wp_send_json_error( array(
+					'message' => sprintf(
+						/* translators: %s: USDC amount available to withdraw */
+						__( 'You can withdraw up to %s USDC right now — the rest of the balance is reserved for the 1%% platform fee.', 'agentpay-by-cleardesk-seo' ),
+						self::fmt_usdc( $available )
+					),
+				), 400 );
+			}
+		}
+
+		$result = Facilitator::transfer(
+			$to,
+			$atomic,
+			'withdraw-' . wp_generate_password( 16, false ),
+			array( 'type' => 'merchant_withdrawal' )
+		);
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ), 400 );
+		}
+		$tx = isset( $result['tx_hash'] ) ? $result['tx_hash'] : '';
+		wp_send_json_success( array(
+			'message' => sprintf(
+				/* translators: %s: amount of USDC sent */
+				__( 'Sent %s USDC to your Coinbase address. It should arrive in about a minute.', 'agentpay-by-cleardesk-seo' ),
+				number_format( $amount_f, 2 )
+			),
+			'tx'     => $tx,
+			'tx_url' => $tx ? ( 'https://basescan.org/tx/' . $tx ) : '',
+		) );
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Helpers
 	// ─────────────────────────────────────────────────────────────────────────
@@ -486,6 +635,23 @@ class AdminSetup {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'agentpay-by-cleardesk-seo' ) ), 403 );
 		}
 		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+	}
+
+	/**
+	 * Format an atomic USDC amount (6 decimals) for display WITHOUT rounding up.
+	 * Shows the exact value, trimming trailing zeros but keeping at least two
+	 * decimals: 99000 -> "0.099", 100000 -> "0.10", 1000 -> "0.001", 0 -> "0.00".
+	 * Two-decimal rounding previously turned 0.099 into "0.10", which then
+	 * exceeded the real balance and was rejected.
+	 */
+	private static function fmt_usdc( $atomic ) {
+		$s = rtrim( sprintf( '%.6f', ( (int) $atomic ) / 1000000 ), '0' );
+		if ( '.' === substr( $s, -1 ) ) {
+			$s .= '00';                       // "0." -> "0.00"
+		} elseif ( preg_match( '/\.\d$/', $s ) ) {
+			$s .= '0';                        // one decimal -> two
+		}
+		return $s;
 	}
 
 	private function extract_creds( $require_wallet_secret ) {
@@ -505,9 +671,18 @@ class AdminSetup {
 		if ( empty( $id ) || empty( $secret ) ) {
 			wp_send_json_error( array( 'message' => __( 'API Key ID and Secret are both required.', 'agentpay-by-cleardesk-seo' ) ), 400 );
 		}
-		if ( ! self::is_valid_pem( $secret ) ) {
-			wp_send_json_error( array( 'message' => __( 'API Key Secret must be a PEM-formatted EC private key.', 'agentpay-by-cleardesk-seo' ) ), 400 );
+		// Validate with the real signer: accepts an ECDSA PEM or an Ed25519
+		// base64 secret in any exported shape, and auto-extracts the privateKey
+		// when the whole JSON file was pasted. This replaces the old PEM-only
+		// check, which rejected Ed25519 keys at save even though the runtime
+		// signs with them.
+		$valid = CdpClient::validate_signing_secret( $secret );
+		if ( is_wp_error( $valid ) ) {
+			wp_send_json_error( array( 'message' => $valid->get_error_message() ), 400 );
 		}
+		// Persist the normalized form, so what we store is exactly the value the
+		// signer consumes even if a JSON blob was pasted.
+		$secret = CdpClient::normalize_secret_input( $secret );
 		if ( $require_wallet_secret && empty( $wallet ) ) {
 			wp_send_json_error( array( 'message' => __( 'Wallet Secret is required for wallet operations.', 'agentpay-by-cleardesk-seo' ) ), 400 );
 		}
@@ -642,6 +817,7 @@ class AdminSetup {
 				'creating'           => __( 'Provisioning wallet on Base…', 'agentpay-by-cleardesk-seo' ),
 				'attaching'          => __( 'Verifying address…', 'agentpay-by-cleardesk-seo' ),
 				'copied'             => __( 'Copied', 'agentpay-by-cleardesk-seo' ),
+				'sending'            => __( 'Sending…', 'agentpay-by-cleardesk-seo' ),
 				'confirm_disconnect' => __( 'Disconnect this wallet from ClearWallet? This stops new payments and refunds until you reconnect. In-flight transactions will continue.', 'agentpay-by-cleardesk-seo' ),
 			),
 		) );

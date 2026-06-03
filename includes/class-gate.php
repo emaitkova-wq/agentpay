@@ -52,17 +52,31 @@ class Gate {
         $requirements = self::build_requirements();
         $verify = Facilitator::verify($payment, $requirements);
         if (is_wp_error($verify) || empty($verify['isValid'])) {
-            Abuse::record($detection['agent_id'], 'failed_verify',
-                is_wp_error($verify) ? $verify->get_error_message() : 'invalid');
-            self::challenge_402($detection,
-                is_wp_error($verify) ? $verify->get_error_message() : 'invalid payment');
+            // Surface the facilitator's specific reason. On a WP_Error the
+            // message already carries the CDP response body; when CDP returns
+            // HTTP 200 with isValid=false it puts the reason in invalidReason —
+            // relay that instead of a generic "invalid payment".
+            $reason = is_wp_error($verify)
+                ? $verify->get_error_message()
+                : ('payment verification failed: ' . (
+                    !empty($verify['invalidReason']) ? $verify['invalidReason']
+                    : ( !empty($verify['error']) ? $verify['error']
+                    : 'the facilitator returned isValid=false with no reason' )
+                  ));
+            Abuse::record($detection['agent_id'], 'failed_verify', $reason);
+            self::challenge_402($detection, $reason);
         }
 
         $settle = Facilitator::settle($payment, $requirements);
         if (is_wp_error($settle) || empty($settle['transaction'])) {
-            self::deny(402, 'Settlement failed', [
-                'error' => is_wp_error($settle) ? $settle->get_error_message() : 'unknown',
-            ]);
+            // Same treatment for settlement: relay the facilitator's reason.
+            $reason = is_wp_error($settle)
+                ? $settle->get_error_message()
+                : ( !empty($settle['errorReason']) ? $settle['errorReason']
+                  : ( !empty($settle['invalidReason']) ? $settle['invalidReason']
+                  : ( !empty($settle['error']) ? $settle['error']
+                  : 'settlement returned no transaction hash' )));
+            self::deny(402, 'Settlement failed', ['error' => $reason]);
         }
 
         $tx_hash = $settle['transaction'];
@@ -104,7 +118,8 @@ class Gate {
             ],
             'dispute_url' => rest_url('clearwallet/v1/dispute'),
         ];
-        if ($reason) { $body['error'] = $reason; }
+        // Put the error first so it's visible even in truncated/curl output.
+        if ($reason) { $body = ['error' => $reason] + $body; }
 
         status_header(402);
         nocache_headers();

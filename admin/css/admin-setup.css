@@ -69,3 +69,16 @@
 .ap-loud-ack span { font-size: 13.5px; font-weight: 500; line-height: 1.55; color: #1d2327; }
 .ap-modal-actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
 .ap-loud-open[aria-disabled="true"] { opacity: 0.5; pointer-events: none; cursor: not-allowed; }
+
+/* ── Cash out panel ─────────────────────────────────────────────────────── */
+.clearwallet-setup .ap-cashout { background: #fff; border: 1px solid #dcdcde; border-radius: 4px; padding: 22px 24px; margin: 0 0 20px; }
+.clearwallet-setup .ap-cashout h3 { margin: 0 0 6px; font-size: 15px; color: #4a2872; }
+.clearwallet-setup .ap-cashout-lede { margin: 0 0 8px; font-size: 13px; color: #1d2327; }
+.clearwallet-setup .ap-cashout-options { margin: 0 0 16px 18px; padding: 0; list-style: disc; }
+.clearwallet-setup .ap-cashout-options li { font-size: 13px; color: #50575e; line-height: 1.55; margin-bottom: 6px; }
+.clearwallet-setup .ap-cashout-balance { padding: 10px 14px; background: #f7f3ec; border: 1px solid #f4d35e; border-radius: 4px; font-size: 14px; color: #412402; margin-bottom: 16px; }
+.clearwallet-setup .ap-cashout-balance strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.clearwallet-setup .ap-withdraw-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.clearwallet-setup #ap-withdraw-max { font-size: 12px; }
+.clearwallet-setup .ap-cashout-fineprint { font-size: 12px; color: #646970; margin: 12px 0 0; font-style: italic; line-height: 1.5; }
+.clearwallet-setup .ap-cashout-fee { color: #646970; font-size: 13px; font-weight: normal; }

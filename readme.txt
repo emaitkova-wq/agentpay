@@ -4,7 +4,7 @@ Tags: ai, agents, x402, usdc, paywall
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.4.7
+Stable tag: 1.4.16
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -133,6 +133,38 @@ Per-provider terms and privacy policies (the operator using this plugin is respo
 The full current list and any new providers added in future versions are visible in `includes/class-detector.php` under `KNOWN_AGENTS`.
 
 == Changelog ==
+
+= 1.4.16 =
+* Fixed a cash-out rounding bug. The available balance was rounded to two decimals for display, which could round UP (e.g. 0.099 shown as "0.10") and then exceed the real withdrawable amount, so the Max/displayed value was rejected. Amounts now display their exact value (up to USDC's six decimals), and the reserved 1% fee is shown next to the available balance so the deduction is visible.
+
+= 1.4.15 =
+* Hotfix: removed a duplicate pending_atomic() method that caused a fatal "Cannot redeclare" error on activation in 1.4.14. No behavior change otherwise.
+
+= 1.4.14 =
+* Fixed the fee-sweep and cash-out "insufficient_funds" / out-of-sync error. The sweep now caps each transfer at the wallet's actual on-chain balance and reduces the pending counter by what was really swept, instead of always trying to send the full pending amount (which failed at the facilitator once the balance and the counter drifted apart). The cash-out now reserves the unswept 1% fee, so you can only withdraw your net balance and can't drain the funds the sweep needs.
+* Moved "Cash out your balance" to the Transactions tab.
+* Renamed the "Setup guide" tab to "Wallet Setup".
+
+= 1.4.13 =
+* New — cash out from ClearWallet → Setup. A "Send to Coinbase" button moves USDC from your wallet to any address (typically your personal Coinbase deposit address) using a gasless transfer, so Coinbase covers the gas. It shows your available balance with a one-click Max. Paying out to your bank directly requires a Coinbase Business (Portal) account with payouts enabled; otherwise send to your personal Coinbase, sell for USD, and withdraw to your bank.
+* Clearer credential errors. A 401 on an operation that signs with the Wallet Secret (fee sweeps, refunds, withdrawals) now points to the Wallet Secret instead of the API key, since the API key is already proven whenever agent payments succeed.
+
+= 1.4.12 =
+* Fixed the real cause of facilitator "HTTP 401" / "not valid base64" errors when an agent pays. Stored CDP credentials were only decrypted inside the WordPress admin, so on front-end agent requests the still-encrypted value was handed to the signer and rejected. Credentials are now decrypted at runtime in every context. Existing saved keys work as soon as you update — no need to re-enter them (unless your site's security salts have changed since saving).
+
+= 1.4.11 =
+* Ed25519 API keys now save correctly. The Setup form previously demanded a PEM ("must be a PEM-formatted EC private key"), which rejected Ed25519 keys even though the plugin signs with them. It now validates a key exactly the way it signs — accepting both an ECDSA PEM and an Ed25519 base64 secret.
+* Pasting the entire CDP API Key JSON file now works: the plugin extracts the privateKey field automatically instead of failing.
+* Unparseable secrets now return a precise, safe diagnostic (length, count of non-base64 characters, and whether the value looks like JSON or a PEM) instead of a generic message.
+
+= 1.4.10 =
+* Fixed Ed25519 CDP API key signing. The CDP API Key Secret is now accepted in every form it can be exported as — a 32-byte seed, a 48-byte PKCS#8 DER, or the 64-byte seed+public-key form — instead of only the 64-byte form. This resolves "API Key Secret is not a valid Ed25519 key" and the resulting facilitator HTTP 401 when paying with an Ed25519 key (CDP's default key type).
+
+= 1.4.9 =
+* Clearer CDP authentication errors. If a facilitator call can't be authenticated, the plugin now reports the real cause — missing credentials, or a key that won't sign — instead of silently sending an unauthenticated request that Coinbase answers with a misleading "401 Unauthorized". A 401/403 from CDP now includes guidance to run Test Connection and re-check your API Key ID and Secret.
+
+= 1.4.8 =
+* Clearer payment errors. When the Coinbase facilitator declines a payment, the 402 response now relays its specific reason (the facilitator's invalidReason / errorReason) instead of a generic "invalid payment", and the error field is placed first in the response body so it stays visible even in truncated output.
 
 = 1.4.7 =
 * x402 protocol v2 — required for live settlement on Base mainnet through the Coinbase facilitator. Payment requirements and payloads now use CAIP-2 network identifiers (eip155:8453 for Base, eip155:84532 for Base Sepolia), send x402Version 2 on the 402 challenge and on /verify and /settle, and include the `amount`, `mimeType`, and `outputSchema` fields the facilitator now requires. Gasless sweeps and refunds carry the matching `accepted` field. These are the same fixes proven out by a live agent-to-merchant USDC settlement.

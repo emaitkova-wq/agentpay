@@ -182,17 +182,30 @@ class Facilitator {
         // The CDP facilitator requires a Bearer JWT signed with the operator's
         // CDP API Key Secret (ES256/EdDSA). The x402.org facilitator is open
         // and needs no auth, so we only build the JWT when targeting CDP.
+        //
+        // If the credentials are missing or the JWT can't be signed, RETURN the
+        // real reason. Previously this block swallowed those errors and sent the
+        // request with no Authorization header, which CDP answers with a
+        // misleading "HTTP 401 Unauthorized" that hides the true cause.
         if ($authenticated && false !== strpos($base, 'api.cdp.coinbase.com')) {
             $client = CdpClient::from_stored_credentials();
-            if (!is_wp_error($client)) {
-                // generate_bearer_jwt builds the uri as
-                // "POST api.cdp.coinbase.com/platform/v2{path}". The facilitator
-                // lives under /platform/v2/x402, so prefix the path accordingly.
-                $jwt = $client->generate_bearer_jwt('POST', '/x402' . $path);
-                if (!is_wp_error($jwt)) {
-                    $headers['Authorization'] = 'Bearer ' . $jwt;
-                }
+            if (is_wp_error($client)) {
+                return new \WP_Error('clearwallet_cdp_credentials',
+                    'CDP credentials are not configured or could not be loaded: '
+                    . $client->get_error_message()
+                    . ' Connect your Coinbase CDP API key in ClearWallet → Setup.');
             }
+            // generate_bearer_jwt builds the uri as
+            // "POST api.cdp.coinbase.com/platform/v2{path}". The facilitator
+            // lives under /platform/v2/x402, so prefix the path accordingly.
+            $jwt = $client->generate_bearer_jwt('POST', '/x402' . $path);
+            if (is_wp_error($jwt)) {
+                return new \WP_Error('clearwallet_cdp_jwt',
+                    'Could not sign the CDP authentication token: '
+                    . $jwt->get_error_message()
+                    . ' Re-check (and re-paste) your CDP API Key Secret in ClearWallet → Setup.');
+            }
+            $headers['Authorization'] = 'Bearer ' . $jwt;
         }
 
         $resp = wp_remote_post($base . $path, [
@@ -211,6 +224,13 @@ class Facilitator {
             $msg = isset($data['error']) ? $data['error']
                  : (isset($data['invalidReason']) ? $data['invalidReason']
                  : ('Facilitator returned HTTP ' . $code));
+            if (401 === $code || 403 === $code) {
+                // CDP rejected the API credentials themselves (not the payment).
+                $msg .= ' — Coinbase CDP rejected the API credentials. In ClearWallet -> Setup, '
+                      . 'click "Test Connection"; if that also fails, re-create a CDP Secret API Key '
+                      . 'and paste the matching Key ID and Secret (from the same key). Also confirm your '
+                      . 'CDP account identity is verified and the project has x402 access.';
+            }
             return new \WP_Error('clearwallet_facilitator_error',
                 $msg . ' (HTTP ' . $code . '): ' . substr((string) $raw, 0, 300), $data);
         }

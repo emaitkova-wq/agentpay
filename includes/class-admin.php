@@ -140,7 +140,7 @@ class Admin {
             'fees'      => 'Fees',
             'disputes'  => 'Disputes',
             'logs'      => 'Transactions',
-            'setup'     => 'Setup guide',
+            'setup'     => 'Wallet Setup',
             'docs'      => 'Agent docs',
         ];
         echo '<h2 class="nav-tab-wrapper">';
@@ -543,6 +543,12 @@ class Admin {
     }
 
     protected static function render_logs() {
+        // Cash-out panel (moved here from the Wallet Setup tab in v1.4.14). It
+        // renders nothing until a receiving wallet is connected.
+        if (class_exists('\\ClearWallet\\AdminSetup')) {
+            \ClearWallet\AdminSetup::render_cashout_panel();
+        }
+
         global $wpdb;
         $rows = $wpdb->get_results(
             "SELECT * FROM {$wpdb->prefix}clearwallet_transactions ORDER BY id DESC LIMIT 200",

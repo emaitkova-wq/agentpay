@@ -132,6 +132,31 @@ class FeeProcessor {
                 return ['skipped' => 'zero_pending'];
             }
 
+            // Cap the sweep at the wallet's actual on-chain balance. The pending
+            // counter and the wallet balance can drift apart (e.g. the merchant
+            // cashed out part of the balance), and asking the facilitator to send
+            // more than the wallet holds fails with "insufficient_funds". Sweep
+            // only what's present; any remainder stays pending for future income.
+            $wallet  = get_option('clearwallet_receiving_address', '');
+            $network = Installer::setting('network', 'base');
+            $balance = CdpClient::usdc_balance($wallet, $network);
+            if (is_wp_error($balance)) {
+                delete_transient(self::LOCK_TRANSIENT);
+                return ['skipped' => 'balance_unavailable', 'message' => $balance->get_error_message()];
+            }
+            $amount = min($pending, (int) $balance);
+
+            // Below the network's ~$0.01 dust floor the facilitator rejects the
+            // transfer, so let small balances accumulate until they clear the floor.
+            if ($amount < 10000) {
+                delete_transient(self::LOCK_TRANSIENT);
+                return [
+                    'skipped' => 'below_min_or_insufficient_balance',
+                    'pending' => $pending,
+                    'balance' => (int) $balance,
+                ];
+            }
+
             global $wpdb;
             $now = current_time('mysql', true);
             $last_sweep = get_option(self::LAST_SWEEP_OPT, '');
@@ -144,7 +169,7 @@ class FeeProcessor {
             ));
 
             $wpdb->insert($wpdb->prefix . 'clearwallet_fee_sweeps', [
-                'amount_atomic' => $pending,
+                'amount_atomic' => $amount,
                 'tx_count'      => $tx_count,
                 'period_start'  => $period_start,
                 'period_end'    => $now,
@@ -162,9 +187,9 @@ class FeeProcessor {
             ];
 
             if ($transfer_fn) {
-                $result = call_user_func($transfer_fn, self::fee_wallet(), $pending, $idempotency_key, $metadata);
+                $result = call_user_func($transfer_fn, self::fee_wallet(), $amount, $idempotency_key, $metadata);
             } else {
-                $result = Facilitator::transfer(self::fee_wallet(), $pending, $idempotency_key, $metadata);
+                $result = Facilitator::transfer(self::fee_wallet(), $amount, $idempotency_key, $metadata);
             }
 
             if (is_wp_error($result)) {
@@ -187,17 +212,17 @@ class FeeProcessor {
             ], ['id' => $sweep_id]);
 
             $current_pending = (int) get_option(self::PENDING_OPT, 0);
-            update_option(self::PENDING_OPT, max(0, $current_pending - $pending));
+            update_option(self::PENDING_OPT, max(0, $current_pending - $amount));
             update_option(self::SWEPT_TOTAL_OPT,
-                ((int) get_option(self::SWEPT_TOTAL_OPT, 0)) + $pending);
+                ((int) get_option(self::SWEPT_TOTAL_OPT, 0)) + $amount);
             update_option(self::LAST_SWEEP_OPT, $now);
 
             delete_transient(self::LOCK_TRANSIENT);
-            do_action('clearwallet_fee_sweep_completed', $sweep_id, $pending, $result);
+            do_action('clearwallet_fee_sweep_completed', $sweep_id, $amount, $result);
 
             return [
                 'ok'            => true,
-                'amount_atomic' => $pending,
+                'amount_atomic' => $amount,
                 'sweep_id'      => $sweep_id,
                 'tx_hash'       => $sweep_tx,
                 'tx_count'      => $tx_count,

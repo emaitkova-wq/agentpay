@@ -103,6 +103,62 @@ class CdpClient {
 	}
 
 	/**
+	 * Read a wallet's USDC balance (atomic units, 6 decimals) straight from the
+	 * Base RPC via balanceOf. This is public chain data, so it needs no CDP
+	 * auth and works on front-end and admin requests alike.
+	 *
+	 * @param string $address 0x EVM address to check.
+	 * @param string $network 'base' (mainnet) or 'base-sepolia'.
+	 * @return int|\WP_Error Atomic USDC balance, or an error.
+	 */
+	public static function usdc_balance( $address, $network = 'base' ) {
+		if ( ! preg_match( '/^0x[0-9a-fA-F]{40}$/', (string) $address ) ) {
+			return self::error( 'clearwallet_bad_address', 'Wallet address is not a valid 0x address.' );
+		}
+		$rpc  = ( 'base-sepolia' === $network ) ? 'https://sepolia.base.org' : 'https://mainnet.base.org';
+		$usdc = self::usdc_contract( $network );
+		// balanceOf(address): selector 70a08231 + the address left-padded to 32 bytes.
+		$call = '0x70a08231' . str_pad( strtolower( substr( $address, 2 ) ), 64, '0', STR_PAD_LEFT );
+
+		$res = wp_remote_post( $rpc, array(
+			'timeout' => 15,
+			'headers' => array( 'Content-Type' => 'application/json' ),
+			'body'    => wp_json_encode( array(
+				'jsonrpc' => '2.0',
+				'id'      => 1,
+				'method'  => 'eth_call',
+				'params'  => array( array( 'to' => $usdc, 'data' => $call ), 'latest' ),
+			) ),
+		) );
+		if ( is_wp_error( $res ) ) {
+			return self::error( 'clearwallet_rpc_failed', 'Could not reach the Base network to read your balance.' );
+		}
+		$body = json_decode( wp_remote_retrieve_body( $res ), true );
+		if ( ! isset( $body['result'] ) || ! is_string( $body['result'] ) ) {
+			$why = isset( $body['error']['message'] ) ? $body['error']['message'] : 'unexpected RPC response';
+			return self::error( 'clearwallet_rpc_failed', 'Balance lookup failed: ' . $why );
+		}
+		$hex = ltrim( substr( $body['result'], 2 ), '0' );
+		return ( '' === $hex ) ? 0 : self::hex_to_int( $hex );
+	}
+
+	/** Convert a hex string (no 0x prefix) to an integer, big-int-safe where possible. */
+	private static function hex_to_int( $hex ) {
+		if ( function_exists( 'gmp_init' ) ) {
+			return (int) gmp_strval( gmp_init( $hex, 16 ) );
+		}
+		if ( function_exists( 'bcadd' ) ) {
+			$dec = '0';
+			$len = strlen( $hex );
+			for ( $i = 0; $i < $len; $i++ ) {
+				$dec = bcadd( bcmul( $dec, '16' ), (string) hexdec( $hex[ $i ] ) );
+			}
+			return (int) $dec;
+		}
+		return (int) hexdec( $hex );
+	}
+
+	/**
 	 * Provision a new EVM account on Base within the operator's CDP project.
 	 *
 	 * @param string $name 2-36 chars, alphanumeric + hyphens. Auto-sanitized.
@@ -183,13 +239,49 @@ class CdpClient {
 			);
 		}
 
-		$secret = class_exists( '\ClearWallet\AdminSetup' ) ? AdminSetup::decrypt( $secret_enc ) : $secret_enc;
+		// Decrypt the at-rest secrets with our OWN decryptor rather than
+		// AdminSetup::decrypt(): credentials are read during FRONT-END agent
+		// requests, where the admin-only AdminSetup class is NOT loaded. The
+		// previous reliance on it meant the still-encrypted "v1:..." value was
+		// handed to the signer, which failed as "not valid base64".
+		$secret = self::decrypt_stored( $secret_enc );
+		if ( '' === $secret && '' !== (string) $secret_enc ) {
+			return self::error( 'clearwallet_decrypt_failed',
+				'Stored CDP credentials could not be decrypted. This usually means the site security '
+				. 'keys (salts) changed since the key was saved. Re-enter your CDP API key in ClearWallet -> Setup.' );
+		}
 		$wallet = '';
 		if ( ! empty( $wallet_enc ) ) {
-			$wallet = class_exists( '\ClearWallet\AdminSetup' ) ? AdminSetup::decrypt( $wallet_enc ) : $wallet_enc;
+			$wallet = self::decrypt_stored( $wallet_enc );
 		}
 
 		return new self( $id, $secret, $wallet ?: null );
+	}
+
+	/**
+	 * Decrypt a secret produced by AdminSetup::encrypt(). Implemented here so it
+	 * works on front-end requests (where the admin class is not loaded). MUST
+	 * stay in sync with AdminSetup::encrypt()/decrypt(): AES-256-CBC keyed by
+	 * sha256( wp_salt('auth') . 'clearwallet-cdp' ), payload "v1:" . base64(iv.ct).
+	 * Values without the "v1:" prefix are treated as legacy plaintext.
+	 *
+	 * @param string $stored Stored option value.
+	 * @return string Decrypted plaintext, or '' if it could not be decrypted.
+	 */
+	private static function decrypt_stored( $stored ) {
+		$stored = (string) $stored;
+		if ( 0 !== strpos( $stored, 'v1:' ) || ! function_exists( 'openssl_decrypt' ) ) {
+			return $stored; // legacy plaintext, or no OpenSSL to decrypt with
+		}
+		$blob = base64_decode( substr( $stored, 3 ), true );
+		if ( false === $blob || strlen( $blob ) < 17 ) {
+			return '';
+		}
+		$key = hash( 'sha256', wp_salt( 'auth' ) . 'clearwallet-cdp', true );
+		$iv  = substr( $blob, 0, 16 );
+		$ct  = substr( $blob, 16 );
+		$pt  = openssl_decrypt( $ct, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv );
+		return false === $pt ? '' : $pt;
 	}
 
 	/**
@@ -362,7 +454,7 @@ class CdpClient {
 		$data = json_decode( $raw, true );
 
 		if ( $code >= 400 ) {
-			$msg = $this->translate_cdp_error( $code, $data );
+			$msg = $this->translate_cdp_error( $code, $data, (bool) $needs_wallet_auth );
 			$this->last_error = $msg;
 			return self::error(
 				'clearwallet_cdp_http_' . $code,
@@ -381,8 +473,13 @@ class CdpClient {
 	 * Map CDP error codes to operator-facing English.
 	 * @internal Public only for direct test coverage.
 	 */
-	public function translate_cdp_error( $code, $data ) {
+	public function translate_cdp_error( $code, $data, $used_wallet_auth = false ) {
 		if ( 401 === $code ) {
+			if ( $used_wallet_auth ) {
+				return 'Coinbase rejected the request signature. If agent payments already work, your API key '
+					. 'is fine and the Wallet Secret is the likely cause — re-generate it in the Portal (it is shown '
+					. 'only once) and re-enter it in ClearWallet -> Setup.';
+			}
 			return 'Coinbase rejected your API credentials. Double-check the API Key ID and API Key Secret in the Portal.';
 		}
 		if ( 403 === $code ) {
@@ -562,19 +659,70 @@ class CdpClient {
 			return self::error( 'clearwallet_no_sodium', 'PHP sodium extension required for Ed25519 keys. Use an ES256 API key in CDP or upgrade PHP.' );
 		}
 
-		$decoded = base64_decode( $secret_b64, true );
-		if ( false === $decoded || 64 !== strlen( $decoded ) ) {
-			return self::error( 'clearwallet_bad_ed25519_key',
-				'API Key Secret is not a valid Ed25519 key. Expected base64 that decodes to 64 bytes.' );
+		$secret_key = self::ed25519_secret_key_from_input( $secret_b64 );
+		if ( self::is_error( $secret_key ) ) {
+			return $secret_key;
 		}
 
-		// CDP packs seed||pubkey; sodium's sign_detached wants the 64-byte combined form,
-		// which is exactly what CDP gives us. No further parsing needed.
 		try {
-			return sodium_crypto_sign_detached( $message, $decoded );
+			return sodium_crypto_sign_detached( $message, $secret_key );
 		} catch ( \Throwable $e ) {
 			return self::error( 'clearwallet_ed25519_sign_failed', 'Ed25519 signing failed: ' . $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Derive a 64-byte libsodium Ed25519 secret key (seed||pubkey) from whatever
+	 * shape CDP exported the API Key Secret in. The base64 secret may decode to:
+	 *   - 64 bytes: seed||pubkey (a full libsodium secret key) — used as-is
+	 *   - 32 bytes: the seed only — expanded into a full keypair
+	 *   - 48 bytes: Ed25519 PKCS#8 DER — the 16-byte prefix is stripped, then the
+	 *     32-byte seed is expanded
+	 * Accepts standard or URL-safe base64 and ignores surrounding whitespace.
+	 *
+	 * @return string|\WP_Error 64-byte secret key, or an error.
+	 */
+	private static function ed25519_secret_key_from_input( $secret_b64 ) {
+		$raw = preg_replace( '/\s+/', '', (string) $secret_b64 );
+
+		// Try standard base64, then URL-safe (CDP uses standard, but be lenient).
+		$decoded = base64_decode( $raw, true );
+		if ( false === $decoded ) {
+			$decoded = base64_decode( strtr( $raw, '-_', '+/' ), true );
+		}
+		if ( false === $decoded ) {
+			return self::error( 'clearwallet_bad_ed25519_key',
+				'API Key Secret is not valid base64' . self::describe_secret_shape( $secret_b64 )
+				. '. Paste ONLY the privateKey value from your CDP API Key.' );
+		}
+
+		$len = strlen( $decoded );
+
+		// Ed25519 PKCS#8 DER (48 bytes): 16-byte prefix + 32-byte seed.
+		$pkcs8_prefix = "\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20";
+		if ( 48 === $len && $pkcs8_prefix === substr( $decoded, 0, 16 ) ) {
+			$decoded = substr( $decoded, 16 ); // -> 32-byte seed
+			$len     = 32;
+		}
+
+		// Already a full 64-byte libsodium secret key (seed||pubkey).
+		if ( 64 === $len ) {
+			return $decoded;
+		}
+
+		// A 32-byte seed: expand into a keypair and take the secret-key half.
+		if ( 32 === $len ) {
+			try {
+				$keypair = sodium_crypto_sign_seed_keypair( $decoded );
+				return sodium_crypto_sign_secretkey( $keypair );
+			} catch ( \Throwable $e ) {
+				return self::error( 'clearwallet_bad_ed25519_key', 'Could not expand the Ed25519 seed: ' . $e->getMessage() );
+			}
+		}
+
+		return self::error( 'clearwallet_bad_ed25519_key',
+			'API Key Secret did not decode to a recognized Ed25519 key (got ' . $len . ' bytes; expected 32, 48, or 64). '
+			. 'Paste the privateKey value from your CDP API Key exactly as exported, or create an ES256 key instead.' );
 	}
 
 	/**
@@ -659,11 +807,82 @@ class CdpClient {
 			return '';
 		}
 		$secret = (string) $secret;
+
+		// Forgive the most common paste mistake: the whole CDP API Key JSON file
+		// (looks like {"id":"...","privateKey":"..."}). Pull out the key field.
+		$lt = ltrim( $secret );
+		if ( '' !== $lt && '{' === $lt[0] && false !== strpos( $secret, 'privateKey' ) ) {
+			$decoded = json_decode( $secret, true );
+			if ( is_array( $decoded ) ) {
+				foreach ( array( 'privateKey', 'private_key', 'apiKeySecret', 'secret' ) as $k ) {
+					if ( ! empty( $decoded[ $k ] ) && is_string( $decoded[ $k ] ) ) {
+						$secret = $decoded[ $k ];
+						break;
+					}
+				}
+			}
+		}
+
 		if ( false !== strpos( $secret, '-----BEGIN' ) ) {
 			$secret = str_replace( array( "\\n", "\r\n", "\r" ), array( "\n", "\n", "\n" ), $secret );
 			return trim( $secret ) . "\n";
 		}
 		return trim( $secret );
+	}
+
+	/**
+	 * Validate that a secret can actually sign, using the EXACT code paths the
+	 * runtime uses — an ES256 PEM (ECDSA P-256) or an Ed25519 base64 secret in
+	 * any exported shape. Returns true, or a WP_Error explaining the problem.
+	 * The admin Setup form uses this so anything that saves will also work at
+	 * pay time (no more "valid at save, 401 at runtime" mismatch).
+	 *
+	 * @return true|\WP_Error
+	 */
+	public static function validate_signing_secret( $secret ) {
+		$secret = self::normalize_secret_input( $secret );
+		if ( '' === $secret ) {
+			return self::error( 'clearwallet_empty_secret', 'API Key Secret is empty.' );
+		}
+		if ( self::KEY_TYPE_ES256 === self::detect_key_type( $secret ) ) {
+			$pkey = openssl_pkey_get_private( $secret );
+			if ( false === $pkey ) {
+				$pkey = openssl_pkey_get_private( self::repair_pem( $secret ) );
+			}
+			if ( false === $pkey ) {
+				return self::error( 'clearwallet_bad_es256_pem',
+					'API Key Secret looks like a PEM but could not be parsed as an EC private key. '
+					. 'Paste the privateKey value exactly as exported, including the BEGIN/END lines.' );
+			}
+			return true;
+		}
+		// Ed25519: reuse the same loader the signer uses.
+		$key = self::ed25519_secret_key_from_input( $secret );
+		return self::is_error( $key ) ? $key : true;
+	}
+
+	/**
+	 * Describe an unparseable secret WITHOUT revealing it — length, count of
+	 * non-base64 characters, and whether it looks like JSON or a PEM. Mirrors
+	 * the branded "shape" diagnostics that made the Shopify CDP key issues
+	 * debuggable.
+	 */
+	private static function describe_secret_shape( $raw ) {
+		$raw = (string) $raw;
+		if ( '' === trim( $raw ) ) {
+			return ' (the secret is empty)';
+		}
+		$hints = array();
+		$lt    = ltrim( $raw );
+		if ( '' !== $lt && '{' === $lt[0] ) {
+			$hints[] = 'it looks like JSON — paste ONLY the privateKey value, not the whole file';
+		}
+		if ( false !== stripos( $raw, 'PRIVATE KEY' ) ) {
+			$hints[] = 'it contains "PRIVATE KEY" (an ECDSA PEM) — paste it WITH its -----BEGIN/-----END lines';
+		}
+		$non_b64 = preg_match_all( '/[^A-Za-z0-9+\/=_-]/', $raw );
+		$out     = ' (length ' . strlen( $raw ) . ', ' . (int) $non_b64 . ' non-base64 characters)';
+		return $out . ( $hints ? ' — ' . implode( '; ', $hints ) : '' );
 	}
 
 	/**
