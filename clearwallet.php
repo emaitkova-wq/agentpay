@@ -3,7 +3,7 @@
  * Plugin Name:       ClearWallet by ClearDesk SEO
  * Plugin URI:        https://cleardeskseo.com/wp-plugins/
  * Description:       Open source AI agent payment processor. Charge AI agents in USDC for access to your content — RFC 9421 Web Bot Auth, x402 protocol, gasless Coinbase USDC settlement.
- * Version:           1.4.6
+ * Version:           1.4.7
  * Requires PHP:      7.4
  * Requires at least: 6.0
  * Author:            ClearDesk SEO
@@ -15,7 +15,7 @@
 
 if (!defined('ABSPATH')) { exit; }
 
-define('CLEARWALLET_VERSION', '1.4.6');
+define('CLEARWALLET_VERSION', '1.4.7');
 define('CLEARWALLET_FILE', __FILE__);
 define('CLEARWALLET_PATH', plugin_dir_path(__FILE__));
 define('CLEARWALLET_URL', plugin_dir_url(__FILE__));

@@ -86,6 +86,17 @@ class AdminSetup {
 			</nav>
 		</header>
 
+		<div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px 16px;margin:0 0 18px 0;border-radius:0 4px 4px 0;line-height:1.6;">
+			<strong style="display:block;margin-bottom:8px;"><?php esc_html_e( 'Before you begin — please read', 'agentpay-by-cleardesk-seo' ); ?></strong>
+			<p style="margin:0 0 10px;"><?php esc_html_e( 'ClearWallet moves real USDC on Base mainnet. These points trip people up most often — skim them before connecting:', 'agentpay-by-cleardesk-seo' ); ?></p>
+			<ol style="margin:0;padding-left:20px;">
+				<li style="margin-bottom:8px;"><strong><?php esc_html_e( 'Network: Base mainnet (chain ID 8453).', 'agentpay-by-cleardesk-seo' ); ?></strong> <?php esc_html_e( 'Your wallet receives USDC on Base — Coinbase\'s Ethereum L2. Not Ethereum mainnet, not Base Sepolia (testnet), not Polygon. The USDC contract is 0x8335…2913 ("USD Coin" on Base).', 'agentpay-by-cleardesk-seo' ); ?></li>
+				<li style="margin-bottom:8px;"><strong><?php esc_html_e( 'You receive — you never pre-fund.', 'agentpay-by-cleardesk-seo' ); ?></strong> <?php esc_html_e( 'The paying AI agent signs a gasless transfer and Coinbase\'s facilitator pays the gas. You don\'t need ETH and you don\'t fund anything up front — USDC simply lands in your wallet.', 'agentpay-by-cleardesk-seo' ); ?></li>
+				<li style="margin-bottom:8px;"><strong><?php esc_html_e( 'Price at least $0.01 per request.', 'agentpay-by-cleardesk-seo' ); ?></strong> <?php esc_html_e( 'The settlement network rejects "dust" amounts below roughly $0.001, so keep your per-request rates at or above one cent. You set these on the Pricing tab.', 'agentpay-by-cleardesk-seo' ); ?></li>
+				<li style="margin:0;"><strong><?php esc_html_e( 'Verify your Coinbase identity first.', 'agentpay-by-cleardesk-seo' ); ?></strong> <?php esc_html_e( 'CDP requires identity verification on your account before it will move live USDC. Complete that in the CDP portal, otherwise settlement fails even with everything else configured correctly.', 'agentpay-by-cleardesk-seo' ); ?></li>
+			</ol>
+		</div>
+
 		<?php if ( 'existing' === $mode ) : ?>
 			<?php self::render_existing_form(); ?>
 		<?php else : ?>

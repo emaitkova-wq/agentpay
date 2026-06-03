@@ -27,7 +27,7 @@ class Facilitator {
 
     public static function verify($payment_payload, array $requirements) {
         return self::call('/verify', [
-            'x402Version'         => 1,
+            'x402Version'         => 2,
             'paymentPayload'      => $payment_payload,
             'paymentRequirements' => $requirements,
         ], true);
@@ -35,7 +35,7 @@ class Facilitator {
 
     public static function settle($payment_payload, array $requirements) {
         return self::call('/settle', [
-            'x402Version'         => 1,
+            'x402Version'         => 2,
             'paymentPayload'      => $payment_payload,
             'paymentRequirements' => $requirements,
         ], true);
@@ -74,38 +74,49 @@ class Facilitator {
         }
 
         $network = Installer::setting('network', 'base');
+        $caip2   = CdpClient::to_caip2($network);
 
-        // 1. Sign the EIP-3009 authorization as the operator (gasless).
+        // 1. Sign the EIP-3009 authorization as the operator (gasless). The
+        //    signer uses the INTERNAL network name to pick the chainId + the
+        //    EIP-712 domain ("USD Coin" mainnet / "USDC" testnet).
         $signed = $client->sign_eip3009_authorization($from, $destination, (int) $amount_atomic, $network);
         if (is_wp_error($signed)) {
             return $signed;
         }
 
-        // 2. Build the x402 payment envelope around the signed authorization.
-        $envelope = [
-            'x402Version' => 1,
-            'scheme'      => 'exact',
-            'network'     => $network,
-            'payload'     => [
-                'signature'     => $signed['signature'],
-                'authorization' => $signed['authorization'],
-            ],
-        ];
-
-        // 3. Build payment requirements describing what the signature
-        //    authorizes. The facilitator validates the two match.
+        // 2. Build payment requirements describing what the signature
+        //    authorizes. The facilitator validates the two match. x402 v2
+        //    requires the CAIP-2 network, both `amount` and `maxAmountRequired`,
+        //    and `mimeType` + `outputSchema` on every requirement.
         $requirements = [
             'scheme'            => 'exact',
-            'network'           => $network,
+            'network'           => $caip2,
             'asset'             => CdpClient::usdc_contract($network),
             'payTo'             => $destination,
+            'amount'            => (string) $amount_atomic,
             'maxAmountRequired' => (string) $amount_atomic,
             'resource'          => home_url('/clearwallet-internal/transfer'),
             'description'       => 'ClearWallet gasless transfer (sweep or refund)',
+            'mimeType'          => 'application/json',
+            'outputSchema'      => null,
             'maxTimeoutSeconds' => 60,
             'extra'             => [
                 'name'    => ('base-sepolia' === $network) ? 'USDC' : 'USD Coin',
                 'version' => '2',
+            ],
+        ];
+
+        // 3. Build the x402 v2 payment envelope around the signed authorization.
+        //    v2 requires x402Version 2, the CAIP-2 network, and `accepted` set
+        //    to the selected requirements object.
+        $envelope = [
+            'x402Version' => 2,
+            'scheme'      => 'exact',
+            'network'     => $caip2,
+            'accepted'    => $requirements,
+            'payload'     => [
+                'signature'     => $signed['signature'],
+                'authorization' => $signed['authorization'],
             ],
         ];
 

@@ -147,6 +147,23 @@ class CdpClient {
 	}
 
 	/**
+	 * Convert an internal network name to its CAIP-2 chain identifier, which is
+	 * what the x402 v2 wire format (and the CDP facilitator) require. The
+	 * internal names ('base' / 'base-sepolia') are kept everywhere else for
+	 * USDC-contract and EIP-712 domain selection; only the on-the-wire
+	 * `network` fields are converted. Idempotent if already a CAIP-2 string.
+	 *
+	 * @param string $network 'base', 'base-sepolia', or an eip155:* string.
+	 * @return string e.g. 'eip155:8453' (Base mainnet) or 'eip155:84532' (Base Sepolia).
+	 */
+	public static function to_caip2( $network ) {
+		if ( 0 === strpos( (string) $network, 'eip155:' ) ) {
+			return $network; // already CAIP-2
+		}
+		return ( 'base-sepolia' === $network ) ? 'eip155:84532' : 'eip155:8453';
+	}
+
+	/**
 	 * Build a CdpClient from the credentials saved in the WordPress options
 	 * table. Decrypts the API Key Secret and Wallet Secret via AdminSetup's
 	 * at-rest encryption. Returns a ready-to-use client or a WP_Error if the
@@ -571,8 +588,18 @@ class CdpClient {
 	private function sign_es256_pem( $message, $pem ) {
 		$pkey = openssl_pkey_get_private( $pem );
 		if ( false === $pkey ) {
+			// The key may be a valid PEM whose body newlines were flattened by
+			// the field it was pasted through. Re-wrap and retry once before
+			// giving up — same robustness the Shopify build needed for CDP keys.
+			$repaired = self::repair_pem( $pem );
+			if ( $repaired !== $pem ) {
+				$pkey = openssl_pkey_get_private( $repaired );
+			}
+		}
+		if ( false === $pkey ) {
 			return self::error( 'clearwallet_bad_es256_pem',
-				'Could not parse the EC private key. Verify it includes the BEGIN/END lines exactly as exported.' );
+				'Could not parse the EC private key. Paste the privateKey value from your CDP API ' .
+				'Key JSON exactly as exported (including the BEGIN/END lines).' );
 		}
 
 		$sig_der = '';
@@ -582,6 +609,26 @@ class CdpClient {
 		}
 
 		return self::ecdsa_der_to_raw( $sig_der, 32 );
+	}
+
+	/**
+	 * Re-wrap a PEM whose body line breaks were stripped (e.g. pasted through a
+	 * field that flattened them). Extracts the base64 between matching
+	 * BEGIN/END markers and re-chunks it at 64 columns. Returns the input
+	 * unchanged if it doesn't look like a PEM; idempotent for well-formed PEMs.
+	 */
+	private static function repair_pem( $pem ) {
+		if ( ! preg_match( '/-----BEGIN ([A-Z0-9 ]+)-----(.*?)-----END \1-----/s', (string) $pem, $m ) ) {
+			return $pem;
+		}
+		$label = $m[1];
+		$body  = preg_replace( '/[^A-Za-z0-9+\/=]/', '', $m[2] );
+		if ( '' === $body ) {
+			return $pem;
+		}
+		return "-----BEGIN {$label}-----\n"
+			. chunk_split( $body, 64, "\n" )
+			. "-----END {$label}-----\n";
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

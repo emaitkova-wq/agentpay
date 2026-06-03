@@ -147,7 +147,8 @@ class Dispute {
         $rates = Installer::setting('rate_card', []);
         return rest_ensure_response([
             'currency' => 'USDC',
-            'network'  => Installer::setting('network', 'base'),
+            'network'  => CdpClient::to_caip2(Installer::setting('network', 'base')),
+            'network_name' => Installer::setting('network', 'base'),
             'pay_to'   => Installer::setting('payto_wallet', ''),
             'rates'    => array_map(function ($r) {
                 return ['atomic' => (int) $r, 'usd' => Facilitator::atomic_to_decimal((int) $r)];

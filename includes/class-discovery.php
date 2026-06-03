@@ -104,7 +104,8 @@ class Discovery {
 			'protocol'      => 'x402',
 			'detection'     => 'RFC 9421 Web Bot Auth (HTTP Message Signatures)',
 			'currency'      => 'USDC',
-			'network'       => $network,
+			'network'       => CdpClient::to_caip2( $network ),
+			'network_name'  => $network,
 			'usdc_contract' => $usdc,
 			'endpoints'     => array(
 				'rate_card' => array(

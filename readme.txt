@@ -4,7 +4,7 @@ Tags: ai, agents, x402, usdc, paywall
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.4.6
+Stable tag: 1.4.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -133,6 +133,13 @@ Per-provider terms and privacy policies (the operator using this plugin is respo
 The full current list and any new providers added in future versions are visible in `includes/class-detector.php` under `KNOWN_AGENTS`.
 
 == Changelog ==
+
+= 1.4.7 =
+* x402 protocol v2 — required for live settlement on Base mainnet through the Coinbase facilitator. Payment requirements and payloads now use CAIP-2 network identifiers (eip155:8453 for Base, eip155:84532 for Base Sepolia), send x402Version 2 on the 402 challenge and on /verify and /settle, and include the `amount`, `mimeType`, and `outputSchema` fields the facilitator now requires. Gasless sweeps and refunds carry the matching `accepted` field. These are the same fixes proven out by a live agent-to-merchant USDC settlement.
+* Fix: the incoming X-PAYMENT header is now base64-decoded into the payment object before it is sent to the facilitator. It was previously forwarded as the raw encoded string, which the facilitator rejected.
+* Robustness: ES256 / ECDSA API keys whose PEM line breaks were flattened by a hosting control panel are now repaired automatically before signing.
+* Setup: added a "Before you begin" panel covering the Base-mainnet network (chain ID 8453), the gasless model (you never pre-fund), the $0.01 per-request minimum, and the Coinbase identity-verification requirement.
+* Settings, saved credentials, and your receiving wallet are preserved across the update.
 
 = 1.4.6 =
 * Removed the Stripe off-ramp integration. USDC settles into your wallet (your custody); converting to USD is now a separate step you control via Coinbase, Stripe stablecoin payouts, or any off-ramp. See the Cashing out section of SETUP.md.

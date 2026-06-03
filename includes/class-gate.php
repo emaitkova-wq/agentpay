@@ -35,9 +35,18 @@ class Gate {
             return;
         }
 
-        $payment = self::header('x-payment');
-        if (!$payment) {
+        $payment_raw = self::header('x-payment');
+        if (!$payment_raw) {
             self::challenge_402($detection);
+        }
+
+        // x402 sends the payment payload as base64(JSON) in the X-PAYMENT
+        // header. CDP's /verify and /settle expect the DECODED object, not the
+        // raw string, so decode it here. A malformed header is treated as an
+        // unpaid request and re-challenged.
+        $payment = self::decode_payment_header($payment_raw);
+        if (null === $payment) {
+            self::challenge_402($detection, 'invalid X-PAYMENT encoding');
         }
 
         $requirements = self::build_requirements();
@@ -86,7 +95,7 @@ class Gate {
     protected static function challenge_402(array $detection, string $reason = '') {
         $req = self::build_requirements();
         $body = [
-            'x402Version' => 1,
+            'x402Version' => 2,
             'accepts'     => [$req],
             'agent'       => [
                 'detected'  => true,
@@ -122,19 +131,22 @@ class Gate {
     }
 
     public static function build_requirements() {
-        $rate = self::rate_for_request();
+        $rate    = self::rate_for_request();
+        $network = Installer::setting('network', 'base');
         return [
             'scheme'            => 'exact',
-            'network'           => Installer::setting('network', 'base'),
+            'network'           => CdpClient::to_caip2($network),
+            'amount'            => (string) $rate,
             'maxAmountRequired' => (string) $rate,
             'resource'          => self::current_url(),
             'description'       => 'Per-request access',
             'mimeType'          => 'application/json',
+            'outputSchema'      => null,
             'payTo'             => Installer::setting('payto_wallet', ''),
             'maxTimeoutSeconds' => 60,
-            'asset'             => Installer::setting('usdc_contract'),
+            'asset'             => CdpClient::usdc_contract($network),
             'extra'             => [
-                'name'    => 'USD Coin',
+                'name'    => ('base-sepolia' === $network) ? 'USDC' : 'USD Coin',
                 'version' => '2',
             ],
         ];
@@ -168,6 +180,21 @@ class Gate {
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- sanitized on the following line via sanitize_text_field()
         $value = wp_unslash($_SERVER[$key]);
         return is_string($value) ? sanitize_text_field($value) : null;
+    }
+
+    /**
+     * Decode the X-PAYMENT header into the x402 payment-payload object.
+     * The header is base64(JSON); we accept both the standard and URL-safe
+     * base64 alphabets. Returns the decoded associative array, or null if the
+     * header isn't valid base64-encoded JSON.
+     */
+    protected static function decode_payment_header($raw) {
+        if (!is_string($raw) || '' === $raw) { return null; }
+        $b64  = strtr(trim($raw), '-_', '+/');
+        $json = base64_decode($b64, true);
+        if (false === $json || '' === $json) { return null; }
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**
